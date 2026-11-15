@@ -1,0 +1,213 @@
+{
+  "meals": [
+    {
+      "id": "476b50ad-57ba-55ac-bb2a-8292f20a4dc9",
+      "on_date": "2026-11-03",
+      "slot": "dinner",
+      "recipe": {
+        "title": "Test v05 Paste pentru alte zile",
+        "minutes": 15,
+        "servings": 1,
+        "ingredients": [
+          {
+            "name": "Test v05 Paste",
+            "quantity": "100 g"
+          }
+        ],
+        "steps": [
+          "Respectă instrucțiunile de preparare de pe ambalaj."
+        ],
+        "missing_ingredients": [],
+        "id": "ee611101-3969-4d44-b4d7-dffe2a1af3f7",
+        "model": "Rețeta mea",
+        "generated_at": "2026-11-02T18:50:37.154728Z",
+        "generation_ms": 0,
+        "selection_cached": false,
+        "request_key": ""
+      },
+      "servings": 1,
+      "completed": false,
+      "prepared_batch_id": "7af0639b-4c3b-485c-9866-5918b275c4cd"
+    }
+  ],
+  "lines": [],
+  "total_cents": 0,
+  "known_cents": 0,
+  "budget_cents": 10000,
+  "warnings": [],
+  "ai_used": false,
+  "seed": "",
+  "action": {
+    "label": "Plan automat și cumpărături",
+    "changes": [
+      {
+        "kind": "plans",
+        "id": "476b50ad-57ba-55ac-bb2a-8292f20a4dc9",
+        "before": null,
+        "after": {
+          "id": "476b50ad-57ba-55ac-bb2a-8292f20a4dc9",
+          "on_date": "2026-11-03",
+          "slot": "dinner",
+          "recipe": {
+            "title": "Test v05 Paste pentru alte zile",
+            "minutes": 15,
+            "servings": 1,
+            "ingredients": [
+              {
+                "name": "Test v05 Paste",
+                "quantity": "100 g"
+              }
+            ],
+            "steps": [
+              "Respectă instrucțiunile de preparare de pe ambalaj."
+            ],
+            "missing_ingredients": [],
+            "id": "ee611101-3969-4d44-b4d7-dffe2a1af3f7",
+            "model": "Rețeta mea",
+            "generated_at": "2026-11-02T18:50:37.154728Z",
+            "generation_ms": 0,
+            "selection_cached": false,
+            "request_key": ""
+          },
+          "servings": 1,
+          "completed": false,
+          "prepared_batch_id": "7af0639b-4c3b-485c-9866-5918b275c4cd"
+        }
+      }
+    ],
+    "guards": {
+      "pantry": [
+        {
+          "name": "Test v05 Paste",
+          "quantity": 100.0,
+          "unit": "g",
+          "location": "camara",
+          "expires_on": "2026-11-04",
+          "id": "105b9c9c-b7f4-354b-aad3-ee4cd33a1578"
+        }
+      ],
+      "plans": [
+        {
+          "id": "1c129235-e372-404c-8065-7650de8c48f7",
+          "on_date": "2026-11-02",
+          "slot": "dinner",
+          "recipe": {
+            "title": "Test v05 Paste pentru alte zile",
+            "minutes": 15,
+            "servings": 1,
+            "ingredients": [
+              {
+                "name": "Test v05 Paste",
+                "quantity": "100 g"
+              }
+            ],
+            "steps": [
+              "Respectă instrucțiunile de preparare de pe ambalaj."
+            ],
+            "missing_ingredients": [],
+            "id": "ee611101-3969-4d44-b4d7-dffe2a1af3f7",
+            "model": "Rețeta mea",
+            "generated_at": "2026-11-02T18:50:37.154728Z",
+            "generation_ms": 0,
+            "selection_cached": false,
+            "request_key": ""
+          },
+          "servings": 1,
+          "completed": true,
+          "prepared_batch_id": "7af0639b-4c3b-485c-9866-5918b275c4cd"
+        }
+      ],
+      "shopping": [
+        {
+          "name": "Test v05 Paste",
+          "quantity": "500 g",
+          "checked": true,
+          "id": "6ee25ca4-f08f-4900-a39c-9fcdddddd875"
+        }
+      ],
+      "prepared": [
+        {
+          "id": "7af0639b-4c3b-485c-9866-5918b275c4cd",
+          "recipe": {
+            "title": "Test v05 Paste pentru alte zile",
+            "minutes": 15,
+            "servings": 1,
+            "ingredients": [
+              {
+                "name": "Test v05 Paste",
+                "quantity": "100 g"
+              }
+            ],
+            "steps": [
+              "Respectă instrucțiunile de preparare de pe ambalaj."
+            ],
+            "missing_ingredients": [],
+            "id": "ee611101-3969-4d44-b4d7-dffe2a1af3f7",
+            "model": "Rețeta mea",
+            "generated_at": "2026-11-02T18:50:37.154728Z",
+            "generation_ms": 0,
+            "selection_cached": false,
+            "request_key": ""
+          },
+          "cooked_on": "2026-11-02",
+          "expires_on": "2026-11-03",
+          "location": "frigider",
+          "total": 4,
+          "remaining": 3
+        }
+      ],
+      "products": [],
+      "personal_recipes": [
+        {
+          "id": "ee611101-3969-4d44-b4d7-dffe2a1af3f7",
+          "title": "Test v05 Paste pentru alte zile",
+          "minutes": 15,
+          "servings": 1,
+          "ingredients": [
+            {
+              "name": "Test v05 Paste",
+              "quantity": "100 g"
+            }
+          ],
+          "steps": [
+            "Respectă instrucțiunile de preparare de pe ambalaj."
+          ],
+          "equipment": [
+            "Plită",
+            "Oală"
+          ],
+          "diet": "vegan",
+          "category": "main",
+          "updated_at": "2026-11-02T18:50:37.154728Z"
+        }
+      ],
+      "receipts": [],
+      "purchases": [
+        {
+          "id": "3d32e427-9885-49c5-b424-3cd7f3137909",
+          "merchant": "Test v05 Magazin",
+          "spent_on": "2026-11-02",
+          "total_cents": 1250,
+          "expense_id": "237e93a6-ebdf-361a-98f1-5b44c14d1777",
+          "lines": [
+            {
+              "name": "Test v05 Paste",
+              "quantity": 500.0,
+              "unit": "g",
+              "location": "camara",
+              "line_cents": 1250,
+              "include_pantry": true,
+              "warnings": [],
+              "shopping_id": "6ee25ca4-f08f-4900-a39c-9fcdddddd875",
+              "pantry_id": "105b9c9c-b7f4-354b-aad3-ee4cd33a1578",
+              "expires_on": "2026-11-04"
+            }
+          ]
+        }
+      ]
+    },
+    "epoch": "d26a7939-8c94-4476-89c7-40d68240447b"
+  },
+  "existing_meals": 1,
+  "unfilled": 0
+}

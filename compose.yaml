@@ -1,0 +1,56 @@
+name: camara
+services:
+  api:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "${CAMARA_PORT:-8088}:8080"
+    environment:
+      CAMARA_API_KEY: ${CAMARA_API_KEY:?Seteaza CAMARA_API_KEY in .env}
+      CAMARA_DB_PATH: /data/camara.db
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:2b}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-nvidia/nemotron-3.5-super-vl:free}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      TZ: Europe/Bucharest
+      CAMARA_BACKUP_DIR: /backups
+    volumes:
+      - camara-data:/data
+      - ${CAMARA_MODELS_DIR:-/DATA/AppData/camara/models}:/models:ro
+      - ${CAMARA_BACKUPS_DIR:-/DATA/AppData/camara/backups}:/backups
+    depends_on:
+      - ollama
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          req = urllib.request.Request('http://127.0.0.1:8080/health', headers={'Authorization': 'Bearer ' + os.environ['CAMARA_API_KEY']});
+          urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=3).close()
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+  ollama:
+    image: ollama/ollama:0.40.13
+    restart: unless-stopped
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_KEEP_ALIVE: "90s"
+      TZ: Europe/Bucharest
+    volumes:
+      - ollama-data:/root/.ollama
+    # No published AI port; only the API service can reach Ollama on this network.
+volumes:
+  camara-data:
+  ollama-data:
