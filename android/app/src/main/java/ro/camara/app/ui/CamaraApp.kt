@@ -50,6 +50,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ro.camara.app.CamaraViewModel
 import ro.camara.app.UiState
 import ro.camara.app.data.*
@@ -102,7 +106,8 @@ private val PersonalRecipeSaver = Saver<PersonalRecipe?, String>(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearanceChange: (CamaraAppearance) -> Unit) {
+fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: String? = null, onShareHandled: () -> Unit = {},
+    onAppearanceChange: (CamaraAppearance) -> Unit) {
     val state = model.state
     var selected by rememberSaveable { mutableIntStateOf(5) }
     val screenStates = rememberSaveableStateHolder()
@@ -182,7 +187,15 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
     var stockProduct by remember { mutableStateOf<Product?>(null) }
     var deletingProduct by remember { mutableStateOf<Product?>(null) }
     var personalDialog by rememberSaveable { mutableStateOf(false) }
+    var personalNotesOnly by rememberSaveable { mutableStateOf(false) }
     var importRecipe by rememberSaveable { mutableStateOf(false) }
+    var importSources by rememberSaveable { mutableStateOf(false) }
+    var sourceLink by rememberSaveable { mutableStateOf("") }
+    var initialRecipeText by rememberSaveable { mutableStateOf("") }
+    var variantJson by rememberSaveable { mutableStateOf<String?>(null) }
+    var variantId by rememberSaveable { mutableStateOf("") }
+    var recipePhotoReading by remember { mutableStateOf(false) }
+    var recipePhotoError by remember { mutableStateOf<String?>(null) }
     var importPdf by rememberSaveable { mutableStateOf(false) }
     var editingPersonal by rememberSaveable(stateSaver = PersonalRecipeSaver) { mutableStateOf<PersonalRecipe?>(null) }
     var deletingPersonal by remember { mutableStateOf<PersonalRecipe?>(null) }
@@ -195,6 +208,40 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
     val canWrite = !state.busy && !state.generating
     LaunchedEffect(selected) { if (selected == 10 && model.state.cart == null) model.startCart() }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    fun showImportedText(text: String) {
+        model.clearMessage()
+        importSources = false
+        initialRecipeText = text
+        importRecipe = true
+    }
+    LaunchedEffect(sharedLink, state.config) {
+        if (sharedLink != null && state.config != null) {
+            navigate(1)
+            sourceLink = sharedLink
+            recipePhotoError = null
+            importSources = true
+            onShareHandled()
+        }
+    }
+    fun readRecipePhoto(uri: Uri) {
+        val config = state.config ?: return
+        if (recipePhotoReading) return
+        recipePhotoReading = true
+        recipePhotoError = null
+        scope.launch {
+            try {
+                val photo = withContext(Dispatchers.IO) { ImageFiles.jpeg(context, uri) }
+                showImportedText(CamaraApi(config).recipePhotoText(photo))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                recipePhotoError = e.message ?: "Fotografia nu a putut fi citită."
+            } finally {
+                recipePhotoReading = false
+            }
+        }
+    }
     val barcodeLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let { code ->
             if (!productBarcode.matches(code)) model.message("Codul nu este un EAN/UPC acceptat. Îl poți introduce manual în catalog.")
@@ -206,16 +253,21 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
         }
     }
     val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) photoUri?.let { model.scanReceipt(Uri.parse(it)) { preview -> receiptPreview = preview } }
+        if (ok) photoUri?.let {
+            val uri = Uri.parse(it)
+            if (cameraAction == "recipe") readRecipePhoto(uri)
+            else model.scanReceipt(uri) { preview -> receiptPreview = preview }
+        }
     }
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { model.scanReceipt(it) { preview -> receiptPreview = preview } } }
+    val recipeGallery = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(::readRecipePhoto) }
     fun launchCamera(action: String) {
         runCatching {
             when (action) {
                 "barcode" -> barcodeLauncher.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.PRODUCT_CODE_TYPES)
                     .setPrompt("Încadrează codul de bare al produsului").setBeepEnabled(false).setOrientationLocked(false))
                 "batch" -> { model.clearMessage(); batchScan = true }
-                "receipt" -> { val uri = ImageFiles.captureUri(context); photoUri = uri.toString(); captureLauncher.launch(uri) }
+                "receipt", "recipe" -> { val uri = ImageFiles.captureUri(context); photoUri = uri.toString(); captureLauncher.launch(uri) }
             }
         }.onFailure { model.message("Camera nu poate fi deschisă. Poți introduce codul manual sau alege o fotografie.") }
     }
@@ -364,23 +416,37 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
                                         ?: state.snapshot.allRecipes().firstOrNull { it.id == recipeId }
                                     val details: @Composable (Recipe, Modifier) -> Unit = { value, pane ->
                                         key(value.id) {
+                                            val personal = state.snapshot.personal_recipes.firstOrNull { it.id == value.id }
+                                            val cloudApi = state.config?.takeIf { state.online && state.pending.isEmpty() &&
+                                                state.cloudProviders.isNotEmpty() && personal != null }?.let { CamaraApi(it) }
                                             RecipeDetails(value, canWrite, { cookingGuide = true }, { model.addMissing(value); navigate(2) }, pane,
                                                 onCook = { cookingPlan = null; cookingKeepBatch = false; cookingRecipe = value; cookingServings = value.servings },
                                                 onPlan = { initialPlanBatch = null; editingPlan = null; planRecipe = value; planDate = LocalDate.now(); planDialog = true },
-                                                onAdvice = state.config?.takeIf { state.online && state.pending.isEmpty() &&
-                                                    state.cloudProviders.isNotEmpty() && state.snapshot.personal_recipes.any { recipe -> recipe.id == value.id }
-                                                }?.let { config -> { goal -> CamaraApi(config).recipeAdvice(value.id, goal) } })
+                                                onAdvice = cloudApi?.let { api -> { goal -> api.recipeAdvice(value.id, goal) } },
+                                                onConversation = cloudApi?.let { api -> { input -> api.recipeConversation(value.id, input) } },
+                                                onVariant = { draft ->
+                                                    variantId = UUID.randomUUID().toString()
+                                                    variantJson = ActionRules.json.encodeToString(AiImportedRecipe.serializer(), draft)
+                                                },
+                                                onNotes = personal?.let { item -> {
+                                                    editingPersonal = item
+                                                    personalNotesOnly = true
+                                                    personalDialog = true
+                                                } })
                                         }
                                     }
                                     if (page.recipeId == null) {
                                         ListDetailLayout(body, wide, list = { pane ->
                                             RecipesScreen(state, canWrite, model::generate, ::openRecipe, pane, model::setAiMode, model::downloadLocalModel,
-                                                onPersonal = { editingPersonal = it; personalDialog = true }, onDeletePersonal = { deletingPersonal = it },
+                                                onPersonal = { editingPersonal = it; personalNotesOnly = false; personalDialog = true },
+                                                onDeletePersonal = { deletingPersonal = it },
                                                 onSuggest = model::suggestRecipes, onPreview = ::openRecipePreview,
-                                                onImport = { model.clearMessage(); importRecipe = true }, selectedRecipeId = recipeId, onTabChange = { selectedRecipe = null },
+                                                onImport = { showImportedText("") }, selectedRecipeId = recipeId, onTabChange = { selectedRecipe = null },
                                                 onPdfImport = if (state.online && state.cloudProviders.isNotEmpty()) {
                                                     { model.clearMessage(); importPdf = true }
-                                                } else null)
+                                                } else null,
+                                                onSources = { sourceLink = ""; recipePhotoError = null; importSources = true },
+                                                onFavorite = { model.savePersonal(it.copy(favorite = !it.favorite)) {} })
                                         }, detail = { pane ->
                                             if (recipe != null) details(recipe, pane)
                                             else DetailPlaceholder(pane, Icons.Outlined.RestaurantMenu, "Detalii rețetă", "Alege o rețetă din listă.")
@@ -393,7 +459,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
                                 2 -> ShoppingScreen(state.snapshot, canWrite,
                                     onCheck = { model.saveShopping(it.copy(checked = !it.checked)) },
                                     onDelete = { model.deleteShopping(it.id) }, modifier = body, onStore = { navigate(10) },
-                                    onRepeat = model::repeatPurchase, onPrices = { navigate(15) })
+                                    onRepeat = model::repeatPurchase, onPrices = { navigate(15) }, onAisleChange = model::saveShopping)
                                 3 -> PlanScreen(state.snapshot, canWrite,
                                     onAdd = { initialPlanBatch = null; planDate = it; planRecipe = null; editingPlan = null; planDialog = true },
                                     onEdit = { initialPlanBatch = null; editingPlan = it; planRecipe = it.recipe; planDate = LocalDate.parse(it.on_date); planDialog = true },
@@ -489,15 +555,26 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, onAppearance
     }
     stockProduct?.let { product -> ProductStockDialog(product, canWrite, { stockProduct = null }) { id, input -> model.savePantry(id, input) { stockProduct = null } } }
     deletingProduct?.let { product -> ConfirmAction("Elimini produsul din catalog?", "Alimentele deja adăugate în cămară rămân păstrate.", canWrite, { deletingProduct = null }) { model.deleteProduct(product.id); deletingProduct = null } }
-    if (personalDialog) PersonalRecipeDialog(editingPersonal, canWrite, state.snapshot.aliases, { personalDialog = false }) {
+    if (personalDialog) PersonalRecipeDialog(editingPersonal, canWrite, state.snapshot.aliases, { personalDialog = false },
+        notesOnly = personalNotesOnly) {
         model.savePersonal(it) { personalDialog = false }
+    }
+    if (importSources) RecipeSourceDialog(sourceLink, state.online, recipePhotoReading, recipePhotoError,
+        onCamera = { requestCamera("recipe") }, onGallery = { recipeGallery.launch("image/*") },
+        onText = ::showImportedText, onDismiss = { importSources = false })
+    variantJson?.let { serialized ->
+        val draft = remember(serialized) { ActionRules.json.decodeFromString(AiImportedRecipe.serializer(), serialized).draft() }
+        PersonalRecipeDialog(null, canWrite, state.snapshot.aliases, { variantJson = null }, importDraft = draft,
+            importId = variantId, saveError = state.message, reviewTitle = "Verifică varianta propusă") {
+            model.saveImportedPersonal(it) { variantJson = null }
+        }
     }
     if (importRecipe) {
         val aiImport = state.config?.takeIf { state.online && state.cloudProviders.isNotEmpty() }?.let { config ->
             val api = CamaraApi(config)
             api::importRecipeText
         }
-        RecipeImportDialog(canWrite, state.snapshot.aliases, { importRecipe = false }, state.message, aiImport) {
+        RecipeImportDialog(canWrite, state.snapshot.aliases, { importRecipe = false }, state.message, aiImport, initialRecipeText) {
             model.saveImportedPersonal(it) { importRecipe = false }
         }
     }

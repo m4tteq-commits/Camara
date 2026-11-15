@@ -39,7 +39,8 @@ fun RecipesScreen(state: UiState, canWrite: Boolean, onGenerate: (RecipeRequest)
     onAiMode: (String) -> Unit, onDownloadModel: () -> Unit, onPersonal: (PersonalRecipe?) -> Unit, onDeletePersonal: (PersonalRecipe) -> Unit,
     onSuggest: (RecipeRequest) -> Unit, onPreview: (Recipe) -> Unit,
     onImport: () -> Unit = {}, selectedRecipeId: String? = null, onTabChange: () -> Unit = {},
-    onPdfImport: (() -> Unit)? = null) {
+    onPdfImport: (() -> Unit)? = null, onSources: (() -> Unit)? = null,
+    onFavorite: ((PersonalRecipe) -> Unit)? = null) {
     var library by rememberSaveable { mutableStateOf(false) }
     val libraryState = rememberSaveableStateHolder()
     Column(modifier.fillMaxSize()) {
@@ -50,7 +51,7 @@ fun RecipesScreen(state: UiState, canWrite: Boolean, onGenerate: (RecipeRequest)
         val page = Modifier.weight(1f).fillMaxWidth()
         libraryState.SaveableStateProvider(if (library) "personal" else "suggestions") {
             if (library) PersonalRecipesScreen(state.snapshot.personal_recipes, canWrite, onRecipe, onPersonal, onDeletePersonal, page,
-                onImport, selectedRecipeId, onPdfImport)
+                onImport, selectedRecipeId, onPdfImport, onSources, onFavorite)
             else RecipeSuggestions(state, canWrite, onGenerate, onRecipe, page, onAiMode, onDownloadModel, selectedRecipeId, onSuggest, onPreview)
         }
     }

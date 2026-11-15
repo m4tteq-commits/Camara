@@ -7,6 +7,7 @@ __pycache__/
 *.db
 *.db-*
 android/.gradle/
+android/.kotlin/
 android/local.properties
 **/build/
 *.jks

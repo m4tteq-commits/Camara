@@ -55,6 +55,19 @@ internal data class PdfUpload(val id: String, val pages: Int)
 internal data class RecipeAdviceRequest(val goal: String)
 
 @Serializable
+internal data class RecipeExchange(val question: String, val answer: String)
+
+@Serializable
+internal data class RecipeConversationRequest(val question: String, val history: List<RecipeExchange>,
+    val current_variant: AiImportedRecipe? = null)
+
+@Serializable
+internal data class RecipeConversationReply(val answer: String, val variant: AiImportedRecipe? = null)
+
+@Serializable
+internal data class RecipePhotoText(val text: String)
+
+@Serializable
 internal data class RecipeTip(val step: Int, val suggestion: String)
 
 @Serializable

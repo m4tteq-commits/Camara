@@ -20,6 +20,9 @@ import ro.camara.app.data.SAVED_RECIPE_MODEL
 import ro.camara.app.data.Recipe
 import ro.camara.app.data.cloudAiLabels
 import ro.camara.app.data.RecipeAdvice
+import ro.camara.app.data.AiImportedRecipe
+import ro.camara.app.data.RecipeConversationReply
+import ro.camara.app.data.RecipeConversationRequest
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -44,9 +47,13 @@ internal fun recommendationReason(recipe: Recipe, compact: Boolean = false): Str
 
 @Composable
 internal fun RecipeDetails(recipe: Recipe, canWrite: Boolean, onGuide: () -> Unit, onShopping: () -> Unit, modifier: Modifier,
-    onCook: () -> Unit, onPlan: () -> Unit, onAdvice: (suspend (String) -> RecipeAdvice)? = null) {
+    onCook: () -> Unit, onPlan: () -> Unit, onAdvice: (suspend (String) -> RecipeAdvice)? = null,
+    onConversation: (suspend (RecipeConversationRequest) -> RecipeConversationReply)? = null,
+    onVariant: (AiImportedRecipe) -> Unit = {}, onNotes: (() -> Unit)? = null) {
     var showAdvice by rememberSaveable(recipe.id) { mutableStateOf(false) }
+    var conversation by rememberSaveable(recipe.id) { mutableStateOf(false) }
     if (showAdvice && onAdvice != null) RecipeAdviceDialog(onAdvice) { showAdvice = false }
+    if (conversation && onConversation != null) RecipeConversationDialog(onConversation, onVariant, canWrite) { conversation = false }
     val source = when {
         recipe.model == "Rețeta mea" -> "Rețetă personală"
         recipe.model == "Din cămară" -> "Sugestie pentru alimentele aproape de termen"
@@ -72,6 +79,8 @@ internal fun RecipeDetails(recipe: Recipe, canWrite: Boolean, onGuide: () -> Uni
             Spacer(Modifier.height(12.dp))
             if (recipe.steps.isNotEmpty()) Button(onClick = onGuide) { Text("Mod de gătit") }
             if (onAdvice != null) OutlinedButton(onClick = { showAdvice = true }) { Text("Sfaturi de la AI") }
+            if (onConversation != null) OutlinedButton(onClick = { conversation = true }) { Text("Discută cu AI") }
+            if (onNotes != null) OutlinedButton(onClick = onNotes, enabled = canWrite) { Text("Notițe și colecții") }
             OutlinedButton(onClick = onCook, enabled = canWrite) { Text("Am gătit") }
             OutlinedButton(onClick = onPlan, enabled = canWrite) { Text("Adaugă în plan") }
             OutlinedButton(onClick = onShopping, enabled = canWrite) { Text("Completează lista de cumpărături") }

@@ -88,3 +88,59 @@ def test_unmeasured_ingredients_survive_suggestions_and_keep_the_budget_explicit
                    WeekRequest(id=uuid4(), start=recipe_day(), days=1, slots=["dinner"], budget_cents=10000, use_ai=False))
     assert plan["total_cents"] is None and plan["action"] is None
     assert any("Sare" in warning and "Piper" in warning for warning in plan["warnings"])
+
+
+def test_conversation_reuses_variant_and_notes_without_saving(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    path = tmp_path / "conversation.db"
+    recipe = PersonalRecipe(id=uuid4(), title="Terci", minutes=10, servings=1,
+                            ingredients=[{"name": "Ovăz", "quantity": "50 g"}], steps=["Fierbe ovăzul."],
+                            updated_at="2026-11-14", favorite=True, collections=["Mic dejun"],
+                            notes="Mai puțină sare", actual_minutes=12)
+    Database(path).put("personal_recipes", recipe)
+    variant = {"title": "Terci pentru doi", "minutes": 10, "minutes_estimated": True, "servings": 2,
+               "ingredients": [{"name": "Ovăz", "amount": "100", "unit": "g", "original": "100 g ovăz", "quantity_text": ""}],
+               "steps": ["Fierbe ovăzul."], "notes": []}
+    inputs = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        inputs.append(json.loads(payload["messages"][1]["content"]))
+        assert payload["response_format"]["json_schema"]["name"] == "recipe_conversation"
+        result = {"answer": "Folosește 100 g de ovăz.", "variant": variant if len(inputs) == 1 else None}
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]})
+
+    app = create_app(path, KEY, object())
+    with TestClient(app, headers=HEADERS) as api:
+        remote = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        try:
+            app.state.cloud_ai["groq"].client = remote
+            api.put(f"/v1/pantry/{uuid4()}", json={"name": "Ovăz", "quantity": 200, "unit": "g"}).raise_for_status()
+            before = api.get("/v1/snapshot").json()
+            assert before["personal_recipes"][0]["collections"] == ["Mic dejun"]
+            assert before["personal_recipes"][0]["favorite"] is True
+            endpoint = f"/v1/personal-recipes/{recipe.id}/conversation"
+            question = "Adaptează pentru două porții."
+            first = api.post(endpoint, json={"question": question}).raise_for_status().json()
+            next_turn = {"question": "Pot pregăti în avans?",
+                         "history": [{"question": question, "answer": first["answer"]}], "current_variant": first["variant"]}
+            assert api.post(endpoint, json=next_turn).raise_for_status().json()["variant"] is None
+            assert inputs[0]["notes"] == "Mai puțină sare" and inputs[0]["pantry"] == ["Ovăz"]
+            assert inputs[0]["actual_minutes"] == 12
+            assert inputs[1]["history"] == next_turn["history"] and inputs[1]["current_variant"] == variant
+            assert api.get("/v1/snapshot").json() == before
+        finally:
+            api.portal.call(remote.aclose)
+
+
+def test_photo_returns_ocr_text_without_using_ai(tmp_path, monkeypatch):
+    def recognize(data):
+        assert data == b"photo"
+        return "Terci\nIngrediente:\nOvăz\nPași:\nFierbe ovăzul.", 90
+
+    monkeypatch.setattr("app.main.recognize_image_text", recognize)
+    with TestClient(create_app(tmp_path / "photo.db", KEY, object()), headers=HEADERS) as api:
+        result = api.post("/v1/personal-recipes/photo-text", content=b"photo").raise_for_status().json()
+        assert result["text"].startswith("Terci\nIngrediente:")
+        assert api.get("/v1/snapshot").json()["personal_recipes"] == []

@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    destination = ROOT / "releases" / "camara-server-0.9.7.zip"
+    destination = ROOT / "releases" / "camara-server-0.9.8.zip"
     destination.parent.mkdir(parents=True, exist_ok=True)
     files = [ROOT / "compose.yaml", ROOT / ".env.example", ROOT / "backend/Dockerfile",
              ROOT / "backend/.dockerignore", ROOT / "backend/requirements.txt", ROOT / "backend/requirements-lock.txt",

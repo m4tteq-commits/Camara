@@ -18,6 +18,8 @@ Android **1.2.6** și API **0.9.6** păstrează măsurile casnice ca text și pe
 
 Android **1.2.7** și API **0.9.7** încarcă PDF-ul o dată pentru mai multe intervale și reutilizează textul paginilor citite. ZimaOS păstrează sesiunea temporar, până la 30 de minute de la ultima folosire, iar aplicația o reface dacă expiră. Rezultatele devin rețete în bibliotecă după confirmarea salvării.
 
+Android **1.2.9** și API **0.9.8** adaugă conversații cu AI în rețetele personale. Variantele propuse se validează în editor și se salvează ca fișe separate. Favoritele, colecțiile, notițele și timpul real se sincronizează cu ZimaOS. În **Rețetele mele → Link sau fotografie** poți importa o fotografie prin OCR local pe ZimaOS sau o pagină HTTPS care publică o fișă de rețetă. În **Listă** poți corecta raionul oricărui produs, iar în **În magazin** poți salva ordinea raioanelor pentru magazinul curent pe dispozitiv.
+
 Android **0.10.0** adaugă **Scanare în serie** din Astăzi sau Cămară. Verifici ambalajele, depozitarea și termenele înainte de o singură salvare, inclusiv offline. **Listă → Istoric de prețuri** compară bonurile și coșurile confirmate pe kg, litru sau bucată. Pe ecranele late, **Mod de gătit** ține ingredientele în stânga, lângă pasul curent și cronometru. Funcțiile folosesc API-ul existent.
 
 Android **0.9.0** folosește API-ul **0.6.0** pentru pragurile comune din **Cămară → Stoc minim**. În Cămară, **Am folosit** scade cantitatea și o înregistrează în istoricul de consum. Din alerta de termene din **Astăzi**, **Gătește cu ce expiră** deschide rețete potrivite loturilor încă valabile.

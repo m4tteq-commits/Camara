@@ -54,7 +54,7 @@ def test_server_status_reports_database_and_latest_backup_without_ai(tmp_path):
     path = tmp_path / "status.db"
     with TestClient(create_app(path, KEY, object()), headers=HEADERS) as c:
         c.put("/v1/backups/settings", json={"enabled": False}).raise_for_status()
-        assert c.get("/health").raise_for_status().json() == {"status": "ok", "version": "0.9.7"}
+        assert c.get("/health").raise_for_status().json() == {"status": "ok", "version": "0.9.8"}
         before = c.get("/v1/status").raise_for_status().json()
         assert before["database"] == "ready" and before["schema_version"] == 6
         backup = c.post("/v1/backups").raise_for_status().json()

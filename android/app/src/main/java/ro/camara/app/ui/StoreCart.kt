@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ro.camara.app.data.*
@@ -27,9 +28,17 @@ fun InStoreScreen(cart: ShoppingCart?, snapshot: Snapshot, enabled: Boolean, onC
     var discard by remember { mutableStateOf(false) }
     var details by rememberSaveable { mutableStateOf(false) }
     var history by rememberSaveable { mutableStateOf(false) }
+    var ordering by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     if (cart == null) { Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }; return }
+    val context = LocalContext.current
+    val preferences = remember(context) { context.getSharedPreferences("aisle_order", android.content.Context.MODE_PRIVATE) }
+    val merchant = RecipeMath.normalize(cart.merchant).ifBlank { "magazin" }
+    var aisleOrder by remember(merchant) { mutableStateOf(ShoppingAisle.ordered(preferences.getString(merchant, null))) }
     val selected = cart.rows.filter { it.selected }
+    val byAisle = selected.groupBy { ShoppingAisle.forProduct(it.name, it.aisle) }
+    val groups = aisleOrder.mapNotNull { aisle -> byAisle[aisle]?.let { aisle.label to it } }
+    val omitted = cart.rows.filterNot { it.selected }
     val unknown = selected.count { CheckoutRules.cents(it.price) == null }
     val total = selected.sumOf { CheckoutRules.cents(it.price)?.toLong() ?: 0 }
     Column(modifier.fillMaxSize()) {
@@ -48,24 +57,29 @@ fun InStoreScreen(cart: ShoppingCart?, snapshot: Snapshot, enabled: Boolean, onC
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = { discard = true }, enabled = enabled) { Icon(Icons.Outlined.DeleteOutline, "Golește coșul", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             } }
+            item { TextButton(onClick = { ordering = true }, enabled = enabled) { Text("Aranjează raioanele") } }
             if (cart.rows.isEmpty()) item { EmptyPanel(Icons.Outlined.ShoppingCart, "Coșul este gol", "Adaugă un produs, cantitatea și prețul. Confirmi plata când ai terminat.") }
-            items(cart.rows, key = { it.id }) { row ->
-                Card(onClick = { editing = row }, enabled = enabled, colors = CardDefaults.cardColors(containerColor = if (row.selected) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLow)) {
-                    Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(row.selected, { onChange(cart.copy(rows = cart.rows.map { if (it.id == row.id) it.copy(selected = !it.selected) else it })) }, enabled = enabled)
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(row.name, style = MaterialTheme.typography.titleMedium, maxLines = 3)
-                            Text("${row.quantity} ${row.unit}${if (!row.includePantry) " · doar cheltuială" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Text(CheckoutRules.cents(row.price)?.let { money(it.toLong()) } ?: "Adaugă preț", style = MaterialTheme.typography.labelLarge,
-                                color = if (CheckoutRules.cents(row.price) == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface)
-                            Icon(Icons.Outlined.Edit, "Editează ${row.name}", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            val sections = if (omitted.isEmpty()) groups else groups + ("Scoase din coș" to omitted)
+            sections.forEach { (title, rows) ->
+                item(key = "aisle:$title") { SectionTitle(title) }
+                items(rows, key = { it.id }) { row ->
+                    Card(onClick = { editing = row }, enabled = enabled, colors = CardDefaults.cardColors(containerColor = if (row.selected) MaterialTheme.colorScheme.surfaceContainerLowest else MaterialTheme.colorScheme.surfaceContainerLow)) {
+                        Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(row.selected, { onChange(cart.copy(rows = cart.rows.map { if (it.id == row.id) it.copy(selected = !it.selected) else it })) }, enabled = enabled)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(row.name, style = MaterialTheme.typography.titleMedium, maxLines = 3)
+                                Text("${row.quantity} ${row.unit}${if (!row.includePantry) " · doar cheltuială" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                Text(CheckoutRules.cents(row.price)?.let { money(it.toLong()) } ?: "Adaugă preț", style = MaterialTheme.typography.labelLarge,
+                                    color = if (CheckoutRules.cents(row.price) == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface)
+                                Icon(Icons.Outlined.Edit, "Editează ${row.name}", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
             }
-            if (cart.rows.isNotEmpty()) item { Note("Atinge un produs pentru cantitate, preț și termen. Prețul este pentru toată cantitatea poziției.") }
+            if (cart.rows.isNotEmpty()) item { Note("Atinge un produs pentru raion, cantitate, preț și termen. Prețul este pentru toată cantitatea poziției.") }
             error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
             if (snapshot.purchases.isNotEmpty()) item {
                 ExpandablePanel("Confirmate recent", countLabel(snapshot.purchases.size, "cumpărătură înregistrată", "cumpărături înregistrate"), history, { history = !history }, icon = Icons.Outlined.ReceiptLong) {
@@ -89,6 +103,11 @@ fun InStoreScreen(cart: ShoppingCart?, snapshot: Snapshot, enabled: Boolean, onC
                     modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp)) { Text(if (unknown > 0) "Completează prețurile" else "Verifică și confirmă") }
             }
         }
+    }
+    if (ordering) AisleOrderDialog(aisleOrder, { ordering = false }) { updated ->
+        preferences.edit().putString(merchant, updated.joinToString(",") { it.id }).apply()
+        aisleOrder = updated
+        ordering = false
     }
     editing?.let { row -> CartRowDialog(row, snapshot, enabled, { editing = null }) { updated ->
         val rows = if (cart.rows.any { it.id == row.id }) cart.rows.map { if (it.id == row.id) updated else it } else cart.rows + updated
@@ -125,6 +144,7 @@ private fun CartRowDialog(initial: CartRow, snapshot: Snapshot, enabled: Boolean
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Produs cumpărat") }, text = {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(row.name, { row = row.copy(name = it.take(100)) }, label = { Text("Nume") }, modifier = Modifier.fillMaxWidth())
+            AisleField(row.name, row.aisle) { row = row.copy(aisle = it) }
             OutlinedTextField(row.quantity, { row = row.copy(quantity = it.take(12)) }, label = { Text("Cantitate totală") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("buc", "g", "kg", "ml", "l").forEach { unit -> FilterChip(row.unit == unit, { row = row.copy(unit = unit) }, label = { Text(unit) }) } }
             OutlinedTextField(row.price, { row = row.copy(price = it.take(12)) }, label = { Text("Preț total") }, suffix = { Text("lei") }, supportingText = { Text("Pentru toată cantitatea de mai sus.") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())

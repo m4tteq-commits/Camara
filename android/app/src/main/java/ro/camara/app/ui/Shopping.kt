@@ -16,14 +16,17 @@ import androidx.compose.ui.unit.dp
 import ro.camara.app.data.PurchaseHistory
 import ro.camara.app.data.RecipeMath
 import ro.camara.app.data.ShoppingItem
+import ro.camara.app.data.ShoppingAisle
 import ro.camara.app.data.Snapshot
 
 @Composable
 fun ShoppingScreen(snapshot: Snapshot, canWrite: Boolean, onCheck: (ShoppingItem) -> Unit, onDelete: (ShoppingItem) -> Unit,
-    modifier: Modifier, onStore: () -> Unit, onRepeat: (String, Set<Int>, () -> Unit) -> Unit, onPrices: () -> Unit) {
+    modifier: Modifier, onStore: () -> Unit, onRepeat: (String, Set<Int>, () -> Unit) -> Unit, onPrices: () -> Unit,
+    onAisleChange: ((ShoppingItem) -> Unit)? = null) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("pending") }
     var showHistory by rememberSaveable { mutableStateOf(false) }
+    var aisleItemId by rememberSaveable { mutableStateOf<String?>(null) }
     val history = remember(snapshot.purchases, snapshot.receipts) { PurchaseHistory.entries(snapshot) }
     val pending = snapshot.shopping.count { !it.checked }
     val completed = snapshot.shopping.size - pending
@@ -33,6 +36,8 @@ fun ShoppingScreen(snapshot: Snapshot, canWrite: Boolean, onCheck: (ShoppingItem
             (filter == "all" || item.checked == (filter == "checked")) && RecipeMath.normalize(item.name).contains(needle)
         }.sortedBy { it.checked }
     }
+    val activeByAisle = remember(visible) { visible.filterNot { it.checked }.groupBy { ShoppingAisle.forProduct(it.name, it.aisle) } }
+    val checked = remember(visible) { visible.filter { it.checked } }
     LazyColumn(modifier.fillMaxSize(), state = rememberLazyListState(),
         contentPadding = PaddingValues(screenGutter, 12.dp, screenGutter, 100.dp), verticalArrangement = Arrangement.spacedBy(cardGap)) {
         item(key = "header") {
@@ -60,12 +65,35 @@ fun ShoppingScreen(snapshot: Snapshot, canWrite: Boolean, onCheck: (ShoppingItem
             }
             EmptyPanel(if (query.isBlank()) Icons.Outlined.ShoppingBasket else Icons.Outlined.Search, title, detail)
         }
-        items(visible, key = { "product:${it.id}" }) { item -> ShoppingRow(item, canWrite, onCheck, onDelete) }
+        ShoppingAisle.entries.forEach { aisle ->
+            val products = activeByAisle[aisle].orEmpty()
+            if (products.isNotEmpty()) {
+                item(key = "aisle:${aisle.id}") { SectionTitle(aisle.label) }
+                items(products, key = { "product:${it.id}" }) { item ->
+                    ShoppingRow(item, canWrite, onCheck, onDelete, onAisleChange?.let { { aisleItemId = item.id } })
+                }
+            }
+        }
+        if (checked.isNotEmpty()) {
+            item(key = "checked") { SectionTitle(countLabel(checked.size, "produs bifat", "produse bifate")) }
+            items(checked, key = { "product:${it.id}" }) { item ->
+                ShoppingRow(item, canWrite, onCheck, onDelete, onAisleChange?.let { { aisleItemId = item.id } })
+            }
+        }
     }
     if (showHistory) PurchaseHistoryDialog(history, canWrite, { showHistory = false }, onRepeat)
+    snapshot.shopping.firstOrNull { it.id == aisleItemId }?.let { item ->
+        var aisle by rememberSaveable(item.id) { mutableStateOf(item.aisle) }
+        AlertDialog(onDismissRequest = { aisleItemId = null }, title = { Text(item.name) },
+            text = { AisleField(item.name, aisle) { aisle = it } },
+            confirmButton = { TextButton(onClick = { onAisleChange?.invoke(item.copy(aisle = aisle)); aisleItemId = null },
+                enabled = canWrite) { Text("Salvează") } },
+            dismissButton = { TextButton(onClick = { aisleItemId = null }) { Text("Anulează") } })
+    }
 }
 @Composable
-private fun ShoppingRow(item: ShoppingItem, enabled: Boolean, onCheck: (ShoppingItem) -> Unit, onDelete: (ShoppingItem) -> Unit) {
+private fun ShoppingRow(item: ShoppingItem, enabled: Boolean, onCheck: (ShoppingItem) -> Unit, onDelete: (ShoppingItem) -> Unit,
+    onAisle: (() -> Unit)?) {
     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLowest, border = cardOutline()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Checkbox(item.checked, { onCheck(item) }, enabled = enabled)
@@ -74,6 +102,9 @@ private fun ShoppingRow(item: ShoppingItem, enabled: Boolean, onCheck: (Shopping
                     color = if (item.checked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                 if (item.quantity.isNotBlank()) Text(item.quantity, style = MaterialTheme.typography.bodySmall.tabularNumbers(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (onAisle != null) IconButton(onClick = onAisle, enabled = enabled) {
+                Icon(Icons.Outlined.Tune, "Schimbă raionul pentru ${item.name}", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = { onDelete(item) }, enabled = enabled) { Icon(Icons.Outlined.Close, "Elimină ${item.name}", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

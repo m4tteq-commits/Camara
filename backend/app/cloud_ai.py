@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import httpx
 
-from .ai import AiError, RECIPE_SELECTION_RULES, recipe_option, selection_context
+from .ai import AiError, RECIPE_SELECTION_RULES, personal_recipe_signals, recipe_option, selection_context
 from .catalog import expiring_ingredients, expiring_stock, recipe_day
 from .database import Database
 from .models import Recipe, RecipeRequest, Snapshot
@@ -52,7 +52,8 @@ class CloudRecipeProvider:
             cached = choice in choices or (choice == "none" and context.allow_none)
             if not cached:
                 identifiers = {str(number): recipe_id for number, recipe_id in enumerate(choices, 1)}
-                options = [recipe_option(number, choices[recipe_id], due, today)
+                personal = {f"personal-{item.id}": personal_recipe_signals(item) for item in snapshot.personal_recipes}
+                options = [recipe_option(number, choices[recipe_id], due, today) | personal.get(recipe_id, {})
                            for number, recipe_id in identifiers.items()]
                 if context.allow_none:
                     identifiers["none"] = "none"
@@ -92,13 +93,13 @@ class CloudRecipeProvider:
         if self.id == "groq":
             payload["max_completion_tokens"] = 512
             if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-                if name == "pdf_recipe_import":
+                if name in {"pdf_recipe_import", "recipe_conversation"}:
                     payload.update(reasoning_effort="medium", max_completion_tokens=4096, temperature=0)
                 else:
                     payload.update(reasoning_effort="high", max_completion_tokens=3072)
         else:
             # OpenRouter reasoning tokens share the completion budget.
-            payload["max_tokens"] = 4096 if name == "pdf_recipe_import" else 3072
+            payload["max_tokens"] = 4096 if name in {"pdf_recipe_import", "recipe_conversation"} else 3072
         payload["response_format"] = {"type": "json_schema", "json_schema": {
             "name": name, "strict": True, "schema": schema,
         }}

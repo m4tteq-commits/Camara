@@ -110,7 +110,7 @@ def parse_receipt(text: str, image_hash: str, products: list[Product] = (), conf
                           lines=parsed, raw_text=text, warnings=warnings)
 
 
-def recognize_receipt(data: bytes, products=()):
+def recognize_image_text(data: bytes, *, page_layout="6") -> tuple[str, float]:
     if not data or len(data) > 12_000_000:
         raise ValueError("Fotografia trebuie să fie JPEG/PNG și să aibă cel mult 12 MB.")
     try:
@@ -126,12 +126,12 @@ def recognize_receipt(data: bytes, products=()):
         path = Path(temporary) / 'receipt.png'
         image.save(path)
         try:
-            result = subprocess.run(['tesseract', str(path), 'stdout', '-l', 'ron+eng', '--psm', '6', 'tsv'],
+            result = subprocess.run(['tesseract', str(path), 'stdout', '-l', 'ron+eng', '--psm', page_layout, 'tsv'],
                                     capture_output=True, timeout=45, check=True)
         except FileNotFoundError as exc:
             raise RuntimeError("OCR-ul local nu este instalat pe server.") from exc
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
-            raise RuntimeError("Bonul nu a putut fi citit. Încearcă o fotografie mai clară.") from exc
+            raise RuntimeError("Textul nu a putut fi citit. Încearcă o fotografie mai clară.") from exc
     groups, scores = {}, []
     for row in csv.DictReader(io.StringIO(result.stdout.decode('utf-8')), delimiter='\t'):
         if row.get('level') != '5' or not row.get('text', '').strip():
@@ -142,4 +142,9 @@ def recognize_receipt(data: bytes, products=()):
     text = '\n'.join(' '.join(words) for words in groups.values())
     if not text.strip():
         raise ValueError("Nu am găsit text lizibil în fotografie.")
-    return parse_receipt(text, hashlib.sha256(data).hexdigest(), products, sum(scores) / max(1, len(scores)))
+    return text, sum(scores) / max(1, len(scores))
+
+
+def recognize_receipt(data: bytes, products=()):
+    text, confidence = recognize_image_text(data)
+    return parse_receipt(text, hashlib.sha256(data).hexdigest(), products, confidence)

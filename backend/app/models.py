@@ -32,10 +32,14 @@ class StockMinimum(Model):
     unit: Literal["buc", "g", "kg", "ml", "l"]
 
 
+Aisle = Literal["", "produce", "dairy", "meat", "bakery", "pantry", "frozen", "drinks", "other"]
+
+
 class ShoppingInput(Model):
     name: Name
     quantity: str = Field(default="", max_length=80)
     checked: bool = False
+    aisle: Aisle = Field(default="", exclude_if=lambda value: not value)
 
 
 class ShoppingItem(ShoppingInput):
@@ -108,6 +112,11 @@ class PersonalRecipe(Model):
     category: Literal["breakfast", "main", "snack"] = "main"
     updated_at: str
     minutes_estimated: bool = Field(default=False, exclude_if=lambda estimated: not estimated)
+    favorite: bool = Field(default=False, exclude_if=lambda value: not value)
+    collections: list[Annotated[str, StringConstraints(min_length=1, max_length=40)]] = Field(
+        default_factory=list, max_length=12, exclude_if=lambda value: not value)
+    notes: str = Field(default="", max_length=600, exclude_if=lambda value: not value)
+    actual_minutes: int | None = Field(default=None, ge=1, le=999, exclude_if=lambda value: value is None)
 
     @field_validator("steps")
     @classmethod

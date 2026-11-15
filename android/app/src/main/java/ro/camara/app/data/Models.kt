@@ -30,11 +30,15 @@ data class PantryItem(
 data class StockMinimum(val id: String, val name: String, val quantity: Double, val unit: String)
 
 @Serializable
-data class ShoppingInput(val name: String, val quantity: String = "", val checked: Boolean = false)
+@OptIn(ExperimentalSerializationApi::class)
+data class ShoppingInput(val name: String, val quantity: String = "", val checked: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val aisle: String = "")
 
 @Serializable
-data class ShoppingItem(val id: String, val name: String, val quantity: String = "", val checked: Boolean = false) {
-    fun input() = ShoppingInput(name, quantity, checked)
+@OptIn(ExperimentalSerializationApi::class)
+data class ShoppingItem(val id: String, val name: String, val quantity: String = "", val checked: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val aisle: String = "") {
+    fun input() = ShoppingInput(name, quantity, checked, aisle)
 }
 
 @Serializable
@@ -160,7 +164,11 @@ data class Product(val id: String, val name: String, val barcode: String = "", v
 data class PersonalRecipe(val id: String, val title: String, val minutes: Int, val servings: Int,
     val ingredients: List<Ingredient>, val steps: List<String>, val equipment: List<String> = emptyList(),
     val diet: String = "any", val category: String = "main", val updated_at: String,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) val minutes_estimated: Boolean = false) {
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val minutes_estimated: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val favorite: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val collections: List<String> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val notes: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val actual_minutes: Int? = null) {
     fun recipe() = Recipe(id, title, minutes, servings, ingredients, steps, model = "Rețeta mea", generated_at = updated_at, generation_ms = 0)
 }
 fun Snapshot.allRecipes() = (personal_recipes.map { it.recipe() } + recipes + plans.map { it.recipe } + prepared.map { it.recipe }).distinctBy { it.id }
@@ -199,7 +207,7 @@ data class Purchase(val id: String, val merchant: String, val spent_on: String, 
 @Serializable
 data class CartRow(val id: String, val name: String, val quantity: String = "1", val unit: String = "buc", val price: String = "",
     val location: String = "camara", val expires: String = "", val selected: Boolean = true, val includePantry: Boolean = true,
-    val shoppingId: String? = null, val shoppingBefore: ShoppingItem? = null)
+    val shoppingId: String? = null, val shoppingBefore: ShoppingItem? = null, val aisle: String = shoppingBefore?.aisle.orEmpty())
 @Serializable
 data class ShoppingCart(val id: String, val merchant: String = "Magazin", val date: String, val rows: List<CartRow>,
     val revision: Long = 0, val epoch: String = "")

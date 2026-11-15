@@ -12,8 +12,8 @@ android {
         applicationId = "ro.camara.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.2.8"
+        versionCode = 25
+        versionName = "1.2.9"
         ndk { abiFilters += "arm64-v8a" }
     }
     buildFeatures { compose = true }

@@ -1,5 +1,6 @@
 package ro.camara.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.net.ConnectivityManager
 import android.net.Network
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import ro.camara.app.data.CamaraApi
+import ro.camara.app.data.RecipeWebImport
 import ro.camara.app.ui.CamaraApp
 import ro.camara.app.ui.CamaraTheme
 import ro.camara.app.ui.AppearanceStore
@@ -29,6 +31,19 @@ import ro.camara.app.ui.AppearanceStore
 class MainActivity : ComponentActivity() {
     private val model: CamaraViewModel by viewModels()
     private val aiPresenceOwner = Any()
+    private var sharedLink by mutableStateOf<String?>(null)
+
+    private fun acceptShare(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND || intent.type != "text/plain") return
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString().orEmpty()
+        sharedLink = RecipeWebImport.sharedLink(text)
+        if (sharedLink == null) model.message("Distribuie un link către o rețetă din browser.")
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        acceptShare(intent)
+    }
 
     override fun onStart() {
         super.onStart()
@@ -42,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) acceptShare(intent)
         enableEdgeToEdge()
         val appearanceStore = AppearanceStore(this)
         setContent {
@@ -54,7 +70,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             CamaraTheme(dark, appearance.palette, appearance.motion) {
-                CamaraApp(model, appearance) { updated ->
+                CamaraApp(model, appearance, sharedLink = sharedLink, onShareHandled = { sharedLink = null }) { updated ->
                     appearanceStore.save(updated)
                     appearance = updated
                 }

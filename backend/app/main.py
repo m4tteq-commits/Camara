@@ -23,10 +23,11 @@ from .cloud_ai import CloudProviderId, CloudRecipeProvider, PROVIDERS
 from .bulk import preview
 from .database import BatchConflict, Database, SCHEMA_VERSION
 from .backups import BackupManager, BackupSettings, RestoreRequest
-from .receipts import recognize_receipt
+from .receipts import recognize_image_text, recognize_receipt
 from .recipe_preferences import PreferenceConfirmation
 from .personal_recipe_ai import (ImportedRecipe, RecipeAdvice, RecipeAdviceRequest, RecipeImportText, advice_input,
-                                 draft_from_text, get_advice, with_cloud_backup)
+                                 RecipeConversationReply, RecipeConversationRequest, RecipePhotoText,
+                                 converse, draft_from_text, get_advice, with_cloud_backup)
 from .recipe_pdf import (PDF_MAX_BYTES, PDF_MAX_PAGES, PdfRecipes, PdfSessions, PdfUpload, drafts_from_pdf,
                          page_text, pdf_pages, session_page_text)
 from .weekly import WeekRequest, ai_options, preview as week_preview
@@ -37,7 +38,7 @@ from .models import (AiStatus, BatchResult, BulkPreview, BulkTextRequest, Device
 
 PHONE_MODEL_SHA = "bf1aba9ce8d963124407353c6aa4cbf72eba78db21ae133de983eac672ce83e0"
 PHONE_MODEL_BYTES = 343490560
-API_VERSION = "0.9.7"
+API_VERSION = "0.9.8"
 
 
 def create_app(db_path: Path | None = None, api_key: str | None = None, provider=None) -> FastAPI:
@@ -165,22 +166,42 @@ def create_app(db_path: Path | None = None, api_key: str | None = None, provider
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
-    @app.post("/v1/receipts/preview", response_model=ReceiptPreview)
-    async def receipt_preview(request: Request):
+    async def read_photo(request: Request):
         data = bytearray()
         async for chunk in request.stream():
             data.extend(chunk)
             if len(data) > 12_000_000:
                 raise HTTPException(413, "Fotografia depășește 12 MB.")
+        return bytes(data)
+
+    @app.post("/v1/receipts/preview", response_model=ReceiptPreview)
+    async def receipt_preview(request: Request):
+        data = await read_photo(request)
         if ocr_gate.locked():
             raise HTTPException(429, "Un alt bon este în curs de citire. Reîncearcă în câteva momente.")
         async with ocr_gate:
             try:
-                return await asyncio.to_thread(lambda: recognize_receipt(bytes(data), db.records("products")))
+                return await asyncio.to_thread(lambda: recognize_receipt(data, db.records("products")))
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
             except RuntimeError as exc:
                 raise HTTPException(503, str(exc)) from exc
+
+    @app.post("/v1/personal-recipes/photo-text", response_model=RecipePhotoText)
+    async def recipe_photo(request: Request):
+        data = await read_photo(request)
+        if ocr_gate.locked():
+            raise HTTPException(429, "Se citește deja o fotografie. Reîncearcă în câteva momente.")
+        async with ocr_gate:
+            try:
+                text, _ = await to_thread.run_sync(recognize_image_text, data)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(503, str(exc)) from exc
+        if len(text) > 16_000:
+            raise HTTPException(422, "Fotografia conține prea mult text. Fotografiază o singură rețetă.")
+        return RecipePhotoText(text=text)
 
     @app.get("/v1/snapshot", response_model=Snapshot)
     def snapshot():
@@ -388,15 +409,27 @@ def create_app(db_path: Path | None = None, api_key: str | None = None, provider
                 raise HTTPException(exc.status_code, exc.detail) from exc
         return await pdf_drafts(text)
 
-    @app.post("/v1/personal-recipes/{recipe_id}/advice", response_model=RecipeAdvice)
-    async def personal_recipe_advice(recipe_id: UUID, request: RecipeAdviceRequest):
+    async def saved_recipe_context(recipe_id: UUID):
         snapshot = await asyncio.to_thread(db.recipe_snapshot)
         recipe = next((item for item in snapshot.personal_recipes if item.id == recipe_id), None)
         if recipe is None:
             raise HTTPException(404, "Sincronizează rețeta proprie înainte să ceri sfaturi.")
+        return recipe, snapshot
+
+    @app.post("/v1/personal-recipes/{recipe_id}/advice", response_model=RecipeAdvice)
+    async def personal_recipe_advice(recipe_id: UUID, request: RecipeAdviceRequest):
+        recipe, snapshot = await saved_recipe_context(recipe_id)
         data = advice_input(recipe, request.goal, snapshot)
         try:
             return await with_cloud_backup(app.state.cloud_ai, lambda cloud: get_advice(cloud, recipe, data))
+        except AiError as exc:
+            raise HTTPException(exc.status_code, exc.detail) from exc
+
+    @app.post("/v1/personal-recipes/{recipe_id}/conversation", response_model=RecipeConversationReply)
+    async def personal_recipe_conversation(recipe_id: UUID, request: RecipeConversationRequest):
+        recipe, snapshot = await saved_recipe_context(recipe_id)
+        try:
+            return await with_cloud_backup(app.state.cloud_ai, lambda cloud: converse(cloud, recipe, request, snapshot))
         except AiError as exc:
             raise HTTPException(exc.status_code, exc.detail) from exc
 

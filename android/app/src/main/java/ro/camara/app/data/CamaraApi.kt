@@ -217,6 +217,8 @@ class CamaraApi(private val config: ConnectionConfig, fast: Boolean = false, pri
         json.decodeFromString(request("POST", "/v1/personal-recipes/pdf-uploads/$id/preview?first=$first&last=$last", "{}"))
     internal suspend fun recipeAdvice(id: String, goal: String): RecipeAdvice =
         json.decodeFromString(request("POST", "/v1/personal-recipes/$id/advice", json.encodeToString(RecipeAdviceRequest(goal))))
+    internal suspend fun recipeConversation(id: String, input: RecipeConversationRequest): RecipeConversationReply =
+        json.decodeFromString(request("POST", "/v1/personal-recipes/$id/conversation", json.encodeToString(input)))
     suspend fun useSoonIdeas(): List<UseSoonIdea> = json.decodeFromString(request("GET", "/v1/recipes/use-soon"))
     suspend fun addMissing(id: String) { request("POST", "/v1/recipes/$id/shopping", "{}") }
     suspend fun preview(text: String): BulkPreview = json.decodeFromString(request("POST", "/v1/pantry/preview", json.encodeToString(BulkTextRequest(text))))
@@ -231,16 +233,23 @@ class CamaraApi(private val config: ConnectionConfig, fast: Boolean = false, pri
     suspend fun configureBackups(value: BackupSettings) { request("PUT", "/v1/backups/settings", json.encodeToString(value)) }
     suspend fun previewRestore(id: String): RestorePreview = json.decodeFromString(request("POST", "/v1/backups/$id/preview", "{}"))
     suspend fun restore(id: String, value: RestoreRequest) { request("POST", "/v1/backups/$id/restore", json.encodeToString(value)) }
-    suspend fun scanReceipt(bytes: ByteArray): ReceiptPreview = withContext(Dispatchers.IO) {
-        val call = Request.Builder().url(config.baseUrl + "/v1/receipts/preview")
+    suspend fun scanReceipt(bytes: ByteArray): ReceiptPreview =
+        json.decodeFromString(uploadPhoto("/v1/receipts/preview", bytes, "Bonul nu a putut fi citit."))
+
+    internal suspend fun recipePhotoText(bytes: ByteArray): String =
+        json.decodeFromString<RecipePhotoText>(uploadPhoto("/v1/personal-recipes/photo-text", bytes,
+            "Fotografia nu a putut fi citită.")).text
+
+    private suspend fun uploadPhoto(path: String, bytes: ByteArray, fallbackError: String): String = withContext(Dispatchers.IO) {
+        val call = Request.Builder().url(config.baseUrl + path)
             .header("Authorization", "Bearer ${config.token}").post(bytes.toRequestBody("image/jpeg".toMediaType())).build()
         execute(call).use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val message = runCatching { json.parseToJsonElement(text).jsonObject["detail"]?.jsonPrimitive?.content }.getOrNull()
-                throw ApiException(response.code, message ?: "Bonul nu a putut fi citit.")
+                throw ApiException(response.code, message ?: fallbackError)
             }
-            json.decodeFromString<ReceiptPreview>(text)
+            text
         }
     }
 
