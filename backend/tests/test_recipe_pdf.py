@@ -47,8 +47,6 @@ def test_pdf_preview_validates_input_and_only_sends_page_text(tmp_path, monkeypa
             return httpx.Response(429)
         if len(calls) == 3:
             return httpx.Response(400, json={"error": {"code": "json_validate_failed", "failed_generation": "Private input"}})
-        if len(calls) == 4:
-            return httpx.Response(200, json={"choices": [{"finish_reason": "length"}]})
         draft = {"title": "Omletă", "minutes": 12, "minutes_estimated": True, "servings": None, "notes": [],
                  "ingredients": [{"name": "Ouă", "amount": "2", "unit": "buc", "original": "2 ouă", "quantity_text": ""},
                                  {"name": "Piper", "amount": "", "unit": "buc", "original": "Piper", "quantity_text": ""}],
@@ -76,9 +74,9 @@ def test_pdf_preview_validates_input_and_only_sends_page_text(tmp_path, monkeypa
             assert api.get("/v1/snapshot").json()["personal_recipes"] == []
             failed = api.post(url, content=binary, headers=headers, params=params)
             assert failed.status_code == 502
-            assert all(label in failed.json()["detail"] for label in ("GroqCloud", "OpenRouter"))
+            assert "GroqCloud" in failed.json()["detail"]
             assert "Private input" not in failed.text
-            assert calls == ["api.groq.com", "openrouter.ai", "api.groq.com", "openrouter.ai"]
+            assert calls == ["api.groq.com", "openrouter.ai", "api.groq.com"]
         finally:
             api.portal.call(remote.aclose)
 

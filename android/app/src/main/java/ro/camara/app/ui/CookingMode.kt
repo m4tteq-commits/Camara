@@ -124,7 +124,7 @@ private fun CookingTimer() {
         while (true) {
             remaining = (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
             if (remaining == 0L) break
-            delay(minOf(remaining, 250L))
+            delay((remaining % 1_000L).takeIf { it > 0 } ?: 1_000L)
         }
         deadline = 0L
         finished = true

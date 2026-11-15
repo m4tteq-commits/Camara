@@ -103,7 +103,7 @@ class DesignPreviewActivity : ComponentActivity() {
                             "idea" -> RecipeDetails(selectedIdea, true, { activePage = "guide" }, {}, modifier, {}, {})
                             "guide" -> CookingMode(selectedIdea, modifier) { activePage = "idea" }
                             else -> TodayScreen(UiState(snapshot = snapshot, online = true), { index ->
-                                activePage = when (index) { 0 -> "pantry"; 1 -> "recipes"; 2 -> "shopping"; 3 -> "plan"; 11 -> "prepared"; 12 -> "auto"; 13 -> "minimums"; 14 -> "use-soon"; else -> activePage }
+                                activePage = when (index) { Destination.Pantry -> "pantry"; Destination.Recipes -> "recipes"; Destination.Shopping -> "shopping"; Destination.Plan -> "plan"; Destination.Prepared -> "prepared"; Destination.Automatic -> "auto"; Destination.Minimums -> "minimums"; Destination.UseSoon -> "use-soon"; else -> activePage }
                             }, {}, {}, modifier)
                         }
                     }

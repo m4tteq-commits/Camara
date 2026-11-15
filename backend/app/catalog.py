@@ -1,5 +1,6 @@
 """Authored starter recipes; the local AI selects, never invents preparation steps."""
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from math import isclose
@@ -12,6 +13,7 @@ from .models import ExpiringIngredient, Ingredient, PantryItem, Recipe, RecipeDr
 from .recipe_preferences import ANIMAL_FOODS, contains_phrase, ingredient_preferences, matches_ingredient
 
 
+@lru_cache(maxsize=4096)
 def normalize(value):
     return " ".join("".join(c for c in unicodedata.normalize("NFD", value.casefold()) if not unicodedata.combining(c)).split())
 
@@ -32,6 +34,7 @@ ALIASES.update({"ouale": "oua", "morcovi": "morcov", "morcovii": "morcov", "mar"
                 "hummus": "humus", "orez deja fiert": "orez fiert", "linte rosie uscata": "linte rosie"})
 
 
+@lru_cache(maxsize=4096)
 def canonical(value):
     key = normalize(value)
     return ALIASES.get(key, key)
@@ -136,22 +139,28 @@ def prepare(entry: Entry, request: RecipeRequest, pantry: list[PantryItem]) -> R
     return prepare_with_stock(entry, request, *inventory(pantry))
 
 
-def prepare_with_stock(entry, request, stock, names):
-    ingredients, missing = [], []
+def portions_with_shortages(entry, servings, stock):
     remaining = {}
     for name, amount, unit in entry.parts:
-        required = amount * request.servings
+        required = amount * servings
         key = canonical(name)
-        ingredients.append(Ingredient(name=name, quantity=f"{Decimal(f'{required:g}'):f} {unit}"))
         if key == "apa":  # Potable kitchen water is assumed available and listed explicitly.
+            yield name, unit, required, 0, key
             continue
         stock_key = (key, unit)
         available = remaining.get(stock_key, stock.get(stock_key, 0))
         remaining[stock_key] = max(0, available - required)
-        if available < required and not isclose(available, required, rel_tol=1e-9):
-            shortage = Decimal(f'{required - available:.6g}')
-            quantity = f"{shortage:f} {unit}"
-            if key in names and stock_key not in stock:
+        shortage = required - available if available < required and not isclose(available, required, rel_tol=1e-9) else 0
+        yield name, unit, required, shortage, key
+
+
+def prepare_with_stock(entry, request, stock, names):
+    ingredients, missing = [], []
+    for name, unit, required, shortage, key in portions_with_shortages(entry, request.servings, stock):
+        ingredients.append(Ingredient(name=name, quantity=f"{Decimal(f'{required:g}'):f} {unit}"))
+        if shortage:
+            quantity = f"{Decimal(f'{shortage:.6g}'):f} {unit}"
+            if key in names and (key, unit) not in stock:
                 quantity += " (verifică unitatea din inventar)"
             missing.append(Ingredient(name=name, quantity=quantity))
     for position, item in entry.unmeasured:
@@ -162,7 +171,8 @@ def prepare_with_stock(entry, request, stock, names):
                        servings=request.servings, ingredients=ingredients, steps=list(entry.steps), missing_ingredients=missing)
 
 
-def candidates(request: RecipeRequest, pantry: list[PantryItem], personal_recipes=(), *, require_stock_overlap=True, limit=5) -> list[tuple[Entry, RecipeDraft]]:
+def candidates(request: RecipeRequest, pantry: list[PantryItem], personal_recipes=(), *, require_stock_overlap=True,
+               limit=5, sort_by_shortage=False) -> list[tuple[Entry, RecipeDraft]]:
     equipment = {normalize(value) for value in request.equipment}
     stock, names = inventory(pantry)
     choices = []
@@ -207,12 +217,22 @@ def candidates(request: RecipeRequest, pantry: list[PantryItem], personal_recipe
             continue
         if require_stock_overlap and not primary.intersection(names):
             continue
-        recipe = prepare_with_stock(entry, request, stock, names)
-        if pantry_only and recipe.missing_ingredients:
+        # Only create full drafts for selected entries. Unlimited callers need every draft.
+        recipe = prepare_with_stock(entry, request, stock, names) if limit is None else None
+        if recipe is not None:
+            missing = len(recipe.missing_ingredients)
+        else:
+            missing = sum(shortage > 0 for _, _, _, shortage, _ in portions_with_shortages(entry, request.servings, stock))
+            missing += sum(canonical(part.name) != "apa" for _, part in entry.unmeasured)
+        if pantry_only and missing:
             continue
-        choices.append((len(primary.intersection(names)) / max(1, len(primary)), len(recipe.missing_ingredients), entry, recipe))
-    choices.sort(key=lambda row: (-row[0], row[1], row[3].minutes))
-    return [(row[2], row[3]) for row in (choices if limit is None else choices[:limit])]
+        minutes = entry.minutes + entry.extra_minutes * (request.servings - 1)
+        overlap = len(primary.intersection(names)) / max(1, len(primary))
+        score = (missing, minutes, entry.id) if sort_by_shortage else (-overlap, missing, minutes)
+        choices.append((score, entry, recipe))
+    choices.sort(key=lambda row: row[0])
+    return [(entry, draft if draft is not None else prepare_with_stock(entry, request, stock, names))
+            for _, entry, draft in (choices if limit is None else choices[:limit])]
 
 
 def recipe_day() -> date:
@@ -247,14 +267,13 @@ def expiring_ingredients(draft: RecipeDraft, due: dict[tuple[str, str], date]) -
     return sorted(matched.values(), key=lambda item: (item.expires_on, item.name))
 
 
-def quick_suggestions(request: RecipeRequest, pantry: list[PantryItem], personal_recipes=()) -> list[Recipe]:
-    today = recipe_day()
+def quick_suggestions(request: RecipeRequest, pantry: list[PantryItem], personal_recipes=(), *, today=None) -> list[Recipe]:
+    today = today if today is not None else recipe_day()
     due = expiring_stock(pantry, today)
-    options = candidates(request, unexpired_stock(pantry, today), personal_recipes, limit=None)
-    options.sort(key=lambda row: (len(row[1].missing_ingredients), row[1].minutes, row[0].id))
+    options = candidates(request, unexpired_stock(pantry, today), personal_recipes, limit=5, sort_by_shortage=True)
     return [
         Recipe(**draft.model_dump(), id=uuid5(NAMESPACE_URL, f"camara:suggestion:{entry.id}:{request.servings}"),
                model="Catalog Cămara", generated_at=today.isoformat(), generation_ms=0,
                expiring_ingredients=expiring_ingredients(draft, due))
-        for entry, draft in options[:5]
+        for entry, draft in options
     ]

@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import os
 import time
@@ -9,7 +8,8 @@ from uuid import uuid4
 
 import httpx
 
-from .ai import AiError, RECIPE_SELECTION_RULES, personal_recipe_signals, recipe_option, selection_context
+from .ai import AiError, RECIPE_SELECTION_RULES, personal_recipe_signals, recipe_option, selection_context, prompt_key
+from .request_limits import secret_setting
 from .catalog import expiring_ingredients, expiring_stock, recipe_day
 from .database import Database
 from .models import Recipe, RecipeRequest, Snapshot
@@ -25,11 +25,12 @@ class CloudRecipeProvider:
     def __init__(self, provider: CloudProviderId, client: httpx.AsyncClient, db: Database):
         self.id = provider
         self.label, self.url, prefix = PROVIDERS[provider]
-        self.key = os.environ.get(f"{prefix}_API_KEY", "").strip()
+        self.key = secret_setting(f"{prefix}_API_KEY")
         self.model = os.environ.get(f"{prefix}_MODEL", "").strip()
         self.client = client
         self.db = db
         self.lock = asyncio.Lock()
+        self.selection_lock = asyncio.Lock()
 
     @property
     def configured(self) -> bool:
@@ -42,26 +43,35 @@ class CloudRecipeProvider:
         context, choices = await asyncio.to_thread(selection_context, request, snapshot.pantry, snapshot.personal_recipes)
         today = recipe_day()
         due = expiring_stock(snapshot.pantry, today)
-        key = hashlib.sha256(f"cloud:v2|{self.id}|{self.model}|{context.fingerprint}".encode()).hexdigest()
+        identifiers = {str(number): recipe_id for number, recipe_id in enumerate(choices, 1)}
+        personal = {f"personal-{item.id}": personal_recipe_signals(item) for item in snapshot.personal_recipes}
+        options = [recipe_option(number, choices[recipe_id], due, today) | personal.get(recipe_id, {})
+                   for number, recipe_id in identifiers.items()]
+        if context.allow_none:
+            identifiers["none"] = "none"
+        key = prompt_key(f"{self.id}|{self.model}", RECIPE_SELECTION_RULES,
+                         {"options": options, "preferences": request.preferences, "allowed_ids": list(identifiers)})
+        selected = await asyncio.to_thread(self.db.cached_choice, key)
+        cached = selected in identifiers
+        if cached:
+            choice = identifiers[selected]
+            return self.selected_recipe(choice, choices, due, key, start, cached=True)
         try:
-            await asyncio.wait_for(self.lock.acquire(), timeout=0.1)
+            await asyncio.wait_for(self.selection_lock.acquire(), timeout=0.1)
         except TimeoutError as exc:
-            raise AiError(f"{self.label} pregătește deja o recomandare.", 429) from exc
+            raise AiError(f"{self.label} pregătește deja o recomandare.", 429, retryable=False) from exc
         try:
-            choice = await asyncio.to_thread(self.db.cached_choice, key)
-            cached = choice in choices or (choice == "none" and context.allow_none)
+            selected = await asyncio.to_thread(self.db.cached_choice, key)
+            cached = selected in identifiers
             if not cached:
-                identifiers = {str(number): recipe_id for number, recipe_id in enumerate(choices, 1)}
-                personal = {f"personal-{item.id}": personal_recipe_signals(item) for item in snapshot.personal_recipes}
-                options = [recipe_option(number, choices[recipe_id], due, today) | personal.get(recipe_id, {})
-                           for number, recipe_id in identifiers.items()]
-                if context.allow_none:
-                    identifiers["none"] = "none"
                 selected = await self.select(options, request.preferences, list(identifiers))
-                choice = identifiers[selected]
-                await asyncio.to_thread(self.db.cache_choice, key, choice)
+                await asyncio.to_thread(self.db.cache_choice, key, selected)
+            choice = identifiers[selected]
         finally:
-            self.lock.release()
+            self.selection_lock.release()
+        return self.selected_recipe(choice, choices, due, key, start, cached)
+
+    def selected_recipe(self, choice, choices, due, key, start, cached):
         if choice == "none":
             raise AiError("Nicio rețetă nu se potrivește preferinței. Încearcă alte opțiuni.", 422)
         draft = choices[choice]
@@ -76,12 +86,22 @@ class CloudRecipeProvider:
                                        {"type": "object", "properties": {"recipe_id": {"type": "string", "enum": allowed}},
                                         "required": ["recipe_id"], "additionalProperties": False})
         if not isinstance(result, dict) or set(result) != {"recipe_id"} or result["recipe_id"] not in allowed:
-            raise AiError(f"{self.label} a returnat o alegere invalidă.", 502)
+            raise AiError(f"{self.label} a returnat o alegere invalidă.", 502, retryable=False)
         return result["recipe_id"]
 
     async def structured(self, name, instructions, input_data, schema):
         if not self.configured:
             raise AiError(f"{self.label} trebuie configurat pe ZimaOS.")
+        try:
+            await asyncio.wait_for(self.lock.acquire(), timeout=0.1)
+        except TimeoutError as exc:
+            raise AiError(f"{self.label} este ocupat momentan.", 429, retryable=False) from exc
+        try:
+            return await self._structured(name, instructions, input_data, schema)
+        finally:
+            self.lock.release()
+
+    async def _structured(self, name, instructions, input_data, schema):
         payload = {
             "model": self.model,
             "stream": False,
@@ -90,16 +110,15 @@ class CloudRecipeProvider:
                 {"role": "user", "content": json.dumps(input_data, ensure_ascii=False)},
             ],
         }
+        budget = {"recipe_choice": 768, "personal_recipe_advice": 1536,
+                  "personal_recipe_import": 3072, "pdf_recipe_import": 4096, "recipe_conversation": 4096}.get(name, 3072)
         if self.id == "groq":
-            payload["max_completion_tokens"] = 512
+            payload["max_completion_tokens"] = budget
             if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-                if name in {"pdf_recipe_import", "recipe_conversation"}:
-                    payload.update(reasoning_effort="medium", max_completion_tokens=4096, temperature=0)
-                else:
-                    payload.update(reasoning_effort="high", max_completion_tokens=3072)
+                payload.update(reasoning_effort="low" if name == "recipe_choice" else "medium", temperature=0)
         else:
             # OpenRouter reasoning tokens share the completion budget.
-            payload["max_tokens"] = 4096 if name in {"pdf_recipe_import", "recipe_conversation"} else 3072
+            payload["max_tokens"] = budget
         payload["response_format"] = {"type": "json_schema", "json_schema": {
             "name": name, "strict": True, "schema": schema,
         }}
@@ -122,13 +141,13 @@ class CloudRecipeProvider:
                 raise AiError(f"Verifică soldul sau limita de consum la {self.label}.") from exc
             if status == 429:
                 raise AiError(f"{self.label} a atins limita de cereri.", 429) from exc
-            if status == 400 and name == "pdf_recipe_import":
+            if status == 400:
                 try:
                     failed_validation = exc.response.json()["error"]["code"] == "json_validate_failed"
                 except (KeyError, TypeError, ValueError):
                     failed_validation = False
                 if failed_validation:
-                    raise AiError(f"{self.label} a returnat un rezultat incomplet sau invalid.", 502) from exc
+                    raise AiError(f"{self.label} a returnat un rezultat incomplet sau invalid.", 502, retryable=False) from exc
             if status in (400, 404, 422):
                 raise AiError(f"Verifică modelul configurat pentru {self.label}.") from exc
             raise AiError(f"{self.label} nu este disponibil momentan.") from exc
@@ -141,4 +160,4 @@ class CloudRecipeProvider:
             return json.loads(reply["message"]["content"])
         except (IndexError, KeyError, TypeError, ValueError) as exc:
             raise AiError(f"{self.label} a returnat o alegere invalidă." if name == "recipe_choice"
-                          else f"{self.label} a returnat un rezultat incomplet sau invalid.", 502) from exc
+                          else f"{self.label} a returnat un rezultat incomplet sau invalid.", 502, retryable=False) from exc

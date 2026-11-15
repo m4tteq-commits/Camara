@@ -53,7 +53,7 @@ internal fun RecipeDetails(recipe: Recipe, canWrite: Boolean, onGuide: () -> Uni
     var showAdvice by rememberSaveable(recipe.id) { mutableStateOf(false) }
     var conversation by rememberSaveable(recipe.id) { mutableStateOf(false) }
     if (showAdvice && onAdvice != null) RecipeAdviceDialog(onAdvice) { showAdvice = false }
-    if (conversation && onConversation != null) RecipeConversationDialog(onConversation, onVariant, canWrite) { conversation = false }
+    if (conversation && onConversation != null) RecipeConversationDialog(recipe.id, onConversation, onVariant, canWrite) { conversation = false }
     val source = when {
         recipe.model == "Rețeta mea" -> "Rețetă personală"
         recipe.model == "Din cămară" -> "Sugestie pentru alimentele aproape de termen"

@@ -77,3 +77,25 @@ def test_unrecognized_ingredient_clause_requests_confirmation(tmp_path):
                 response = client.post(path, json={"preferences": text})
                 assert response.status_code == 422
                 assert "Filtre și echipamente" in response.json()["detail"]
+def test_repeated_suggestions_share_cache_until_the_data_or_request_changes(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from test_api import HEADERS, KEY
+
+    calls = []
+
+    def count(request, pantry, personal_recipes, *, today):
+        calls.append((request.servings, len(pantry)))
+        return quick_suggestions(request, pantry, personal_recipes, today=today)
+
+    monkeypatch.setattr("app.main.quick_suggestions", count)
+    with TestClient(create_app(tmp_path / "suggest-cache.db", KEY, object()), headers=HEADERS) as client:
+        url = "/v1/recipes/suggestions"
+        assert client.post(url, json={}).json() == client.post(url, json={}).json() == []
+        assert calls == [(1, 0)]
+        client.put(f"/v1/pantry/{uuid4()}", json={"name": "Ouă", "quantity": 6}).raise_for_status()
+        assert client.post(url, json={}).raise_for_status().json()
+        assert client.post(url, json={"servings": 2}).raise_for_status().json()
+        assert calls == [(1, 0), (1, 1), (2, 1)]

@@ -11,19 +11,21 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import ro.camara.app.BuildConfig
 
 data class ConnectionConfig(
     val baseUrl: String,
     val token: String,
     internal val storageUrl: String = baseUrl,
-    val lanAddress: String? = defaultLanAddress(baseUrl),
+    val lanAddress: String? = null,
 ) {
     internal val storageIdentity: String get() = "$storageUrl\n$token"
 
-    fun validated(): ConnectionConfig {
+    fun validated(allowHttp: Boolean = BuildConfig.DEBUG): ConnectionConfig {
         val clean = baseUrl.trim().trimEnd('/')
         val uri = try { URI(clean) } catch (_: Exception) { error("Adresa serverului nu este validă.") }
-        require(uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) { "Folosește http://IP:8088 sau o adresă HTTPS." }
+        require(uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) { "Introdu adresa serverului." }
+        require(uri.scheme == "https" || allowHttp) { "Folosește adresa HTTPS a serverului." }
         require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null && uri.path.orEmpty().isEmpty()) { "Introdu doar adresa serverului, fără cale sau parolă." }
         val host = uri.host.removePrefix("[").removeSuffix("]")
         require(uri.port == -1 || uri.port in 1..65535) { "Portul serverului nu este valid." }
@@ -31,7 +33,7 @@ data class ConnectionConfig(
         require(uri.scheme == "https" || privateIp(host) || loopback) { "Pentru HTTP folosește IP-ul privat al serverului. Pentru alte adrese este necesar HTTPS." }
         val lan = lanAddress?.trim()?.removeSurrounding("[", "]")?.ifBlank { null }
         require(lan == null || (uri.scheme == "https" && privateIp(lan))) {
-            "Ruta LAN cere o adresă HTTPS a serverului și un IP privat, de exemplu 192.168.1.134."
+            "Ruta LAN cere o adresă HTTPS a serverului și un IP privat."
         }
         val key = token.trim()
         require(key.length >= 32) { "Cheia de acces trebuie să aibă cel puțin 32 de caractere." }
@@ -40,12 +42,6 @@ data class ConnectionConfig(
     }
 
     companion object {
-        internal fun defaultLanAddress(baseUrl: String): String? = runCatching {
-            val uri = URI(baseUrl.trim())
-            if (uri.scheme == "https" && uri.host.equals("camara-m4tteq.duckdns.org", ignoreCase = true) &&
-                uri.port in listOf(-1, 443)) "192.168.1.134" else null
-        }.getOrNull()
-
         private fun ipv4(host: String): List<Int>? {
             val parts = host.split('.')
             if (parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 || it.any { c -> c !in '0'..'9' } ||
@@ -83,10 +79,9 @@ class ConnectionStore(context: Context) {
         val encrypted = Base64.decode(prefs.getString("token", null) ?: return null, Base64.NO_WRAP)
         val iv = Base64.decode(prefs.getString("iv", null) ?: return null, Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv)) }
-        val lan = if (prefs.contains("lan_ip")) prefs.getString("lan_ip", "").orEmpty().ifBlank { null }
-            else ConnectionConfig.defaultLanAddress(url)
+        val lan = prefs.getString("lan_ip", "").orEmpty().ifBlank { null }
         ConnectionConfig(url, String(cipher.doFinal(encrypted), Charsets.UTF_8),
-            prefs.getString("storage_url", url) ?: url, lan).validated()
+            prefs.getString("storage_url", url) ?: url, lan).validated(allowHttp = true)
     }.getOrNull()
 
     fun save(config: ConnectionConfig) {

@@ -3,6 +3,7 @@ import json
 from uuid import uuid4
 
 import httpx
+from test_api import revision
 import pytest
 from fastapi.testclient import TestClient
 
@@ -62,7 +63,8 @@ def test_preview_never_saves_and_batch_is_atomic_idempotent(client):
     item = items[0]
     edited = {k: v for k, v in item.items() if k != "id"}
     edited["quantity"] = 3
-    assert client.put(f"/v1/pantry/{item['id']}", json=edited).status_code == 200
+    path = f"/v1/pantry/{item['id']}"
+    assert client.put(path, json=edited, headers=revision(client, path)).status_code == 200
     assert client.put(url, json={"items": items}).json()["replayed"]
     assert next(p for p in client.get("/v1/snapshot").json()["pantry"] if p["id"] == item["id"])["quantity"] == 3
     items[0]["quantity"] = 10
@@ -104,12 +106,13 @@ def test_device_choice_revalidates_inventory_and_does_not_accept_new_steps(clien
     assert client.post("/v1/recipes/choose", json=choice).status_code == 200
     assert client.post("/v1/recipes/choose", json=choice).status_code == 200
     assert len(client.get("/v1/snapshot").json()["recipes"]) == 1
-    client.put(f"/v1/pantry/{item_id}", json={"name": "Ouă", "quantity": 3})
+    path = f"/v1/pantry/{item_id}"
+    client.put(path, json={"name": "Ouă", "quantity": 3}, headers=revision(client, path)).raise_for_status()
     assert client.post("/v1/recipes/choose", json=choice).status_code == 409
 
 
 @pytest.mark.anyio
-async def test_selection_cache_is_fast_and_invalidated_by_inventory(tmp_path):
+async def test_selection_cache_reuses_the_same_prompt_and_invalidates_changes(tmp_path):
     calls = 0
     def respond(request):
         nonlocal calls
@@ -127,5 +130,8 @@ async def test_selection_cache_is_fast_and_invalidated_by_inventory(tmp_path):
         saved = db.save_recommendation(first)
         assert db.save_recommendation(second).id == saved.id
         pantry[0] = pantry[0].model_copy(update={"quantity": 3})
+        assert (await ai.generate(RecipeRequest(), pantry)).selection_cached
+        assert calls == 1
+        pantry[0] = pantry[0].model_copy(update={"quantity": 1})
         await ai.generate(RecipeRequest(), pantry)
         assert calls == 2

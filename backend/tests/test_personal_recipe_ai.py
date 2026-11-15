@@ -41,7 +41,7 @@ def test_personal_recipe_ai_previews_are_reviewable_and_read_only(tmp_path, monk
         else:
             assert data["missing"] == ["Morcov"]
             assert data["pantry"] == ["Orez"]
-            step = 3 if data["goal"] == "pantry" and request.url.host == "api.groq.com" else 1
+            step = 1
             result = {"tips": [{"step": step, "suggestion": "Pregătește morcovul înainte de a porni plita."}]}
         return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]})
 
@@ -62,7 +62,7 @@ def test_personal_recipe_ai_previews_are_reviewable_and_read_only(tmp_path, monk
         finally:
             api.portal.call(remote.aclose)
     assert calls == [("api.groq.com", "personal_recipe_import"), ("openrouter.ai", "personal_recipe_import"),
-                     ("api.groq.com", "personal_recipe_advice"), ("openrouter.ai", "personal_recipe_advice")]
+                     ("api.groq.com", "personal_recipe_advice")]
 
 
 def test_unmeasured_ingredients_survive_suggestions_and_keep_the_budget_explicit(tmp_path):

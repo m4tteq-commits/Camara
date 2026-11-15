@@ -45,6 +45,33 @@ def test_use_soon_recipes_require_valid_matching_stock_and_do_not_save_recipes(t
     assert client.get("/v1/snapshot").json()["recipes"] == []
 
 
+def test_expiry_recommendations_refresh_on_change_or_new_day(tmp_path, monkeypatch):
+    from app.use_soon import use_soon
+
+    today = date(2026, 11, 15)
+    clock = [today]
+    calls = []
+    monkeypatch.setattr("app.main.recipe_day", lambda: clock[0])
+
+    def count_generation(snapshot, day):
+        calls.append((len(snapshot.pantry), day))
+        return use_soon(snapshot, day)
+
+    monkeypatch.setattr("app.main.use_soon", count_generation)
+    client = TestClient(create_app(tmp_path / "expiry-cache.db", "a" * 40),
+                        headers={"Authorization": "Bearer " + "a" * 40})
+    url = "/v1/recipes/use-soon"
+    assert client.get(url).json() == client.get(url).json() == []
+    assert calls == [(0, today)]
+    client.put(f"/v1/pantry/{uuid4()}", json={"name": "Ouă", "quantity": 6,
+                                           "expires_on": today.isoformat()}).raise_for_status()
+    assert client.get(url).json()
+    assert calls[-1] == (1, today)
+    clock[0] += timedelta(days=1)
+    assert client.get(url).json() == []
+    assert calls == [(0, today), (1, today), (1, clock[0])]
+
+
 def test_quick_use_and_inventory_update_share_a_transaction(tmp_path):
     client = TestClient(create_app(tmp_path / "test.db", "a" * 40))
     client.headers["Authorization"] = "Bearer " + "a" * 40

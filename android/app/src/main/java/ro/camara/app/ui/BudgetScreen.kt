@@ -33,12 +33,12 @@ fun BudgetScreen(snapshot: Snapshot, enabled: Boolean, onExpense: (Expense?) -> 
     var offset by rememberSaveable { mutableLongStateOf(0) }
     var history by rememberSaveable { mutableStateOf(false) }
     val month = YearMonth.now().plusMonths(offset).toString()
-    val expenses = snapshot.expenses.filter { it.spent_on.startsWith(month) }
-    val events = snapshot.events.filter { it.occurred_on.startsWith(month) }
-    val active = events.filterNot { it.undone }
-    val spent = expenses.sumOf { it.amount_cents.toLong() }
+    val expenses = remember(snapshot.expenses, month) { snapshot.expenses.filter { it.spent_on.startsWith(month) } }
+    val events = remember(snapshot.events, month) { snapshot.events.filter { it.occurred_on.startsWith(month) } }
+    val active = remember(events) { events.filterNot { it.undone } }
+    val spent = remember(expenses) { expenses.sumOf { it.amount_cents.toLong() } }
     val limit = snapshot.budgets.firstOrNull { it.month == month }?.limit_cents ?: 0
-    val waste = active.filter { it.kind == "wasted" }
+    val waste = remember(active) { active.filter { it.kind == "wasted" } }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp, 20.dp, 20.dp, 100.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Buget și risipă", style = MaterialTheme.typography.headlineMedium)

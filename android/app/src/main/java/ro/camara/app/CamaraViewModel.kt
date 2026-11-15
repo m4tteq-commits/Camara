@@ -27,6 +27,7 @@ import ro.camara.app.notifications.ReminderScheduler
 data class QuickSuggestions(val request: RecipeRequest, val recipes: List<Recipe>, val fromCatalog: Boolean, val note: String?)
 
 data class UiState(
+    val initializing: Boolean = true,
     val config: ConnectionConfig? = null,
     val snapshot: Snapshot = Snapshot(),
     val online: Boolean = false,
@@ -58,19 +59,23 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
     private val localAi = LocalAi.get(application)
     private val reminders = ReminderStore(application)
     private val carts = CartStore(application)
-    var state by mutableStateOf(UiState(config = store.read(), aiMode = aiPreferences.mode,
+    var state by mutableStateOf(UiState(busy = true, aiMode = aiPreferences.mode,
         localModelReady = localAi.isReady(), reminderSettings = reminders.read()))
         private set
+    private var providersCheckedAt: Long? = null
+    private var localAiCheckedAt: Long? = null
 
     init {
-        state.config?.let { config ->
-            state = state.copy(busy = true)
-            viewModelScope.launch {
-                try { showLocal(withContext(Dispatchers.IO) { offline.read(config) }) }
-                catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    state = state.copy(message = "Nu pot citi jurnalul local. Datele nu au fost suprascrise.")
-                } finally { state = state.copy(busy = false) }
+        viewModelScope.launch {
+            try {
+                val config = withContext(Dispatchers.IO) { store.read() }
+                state = state.copy(config = config)
+                if (config != null) showLocal(withContext(Dispatchers.IO) { offline.read(config) })
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                state = state.copy(message = "Nu pot citi jurnalul local. Datele nu au fost suprascrise.")
+            } finally {
+                state = state.copy(initializing = false, busy = false)
             }
         }
     }
@@ -98,11 +103,13 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val (config, local) = withContext(Dispatchers.IO) { SyncEngine.changeConnection(getApplication(), candidate) }
+                providersCheckedAt = null
+                localAiCheckedAt = null
                 getApplication<CamaraApplication>().serverAiPresence.settingsChanged()
                 val cart = state.cart.takeIf { state.config?.storageIdentity == config.storageIdentity }
                 state = state.copy(config = config, snapshot = local.projected(), serverSnapshot = local.server, pending = local.pending, localRevision = local.revision, online = true, busy = true, lastSync = local.savedAt, message = "Conectat la serverul tău.", cart = cart, quickSuggestions = null, aiStatus = null, cloudProviders = emptyMap())
                 if (local.pending.isNotEmpty()) SyncEngine.schedule(getApplication(), now = true)
-                refreshAi(config)
+                refreshAi(config, force = true)
             } catch (e: Exception) { failure(e) }
             finally { state = state.copy(busy = false) }
         }
@@ -116,7 +123,7 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 showLocal(withContext(Dispatchers.IO) { SyncEngine.sync(getApplication(), config, reuseRecent = silent) })
                 state = state.copy(online = true)
-                refreshAi(config)
+                refreshAi(config, force = !silent)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 state = state.copy(online = false)
@@ -127,17 +134,24 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun refreshAi(config: ConnectionConfig) = coroutineScope {
+    private suspend fun refreshAi(config: ConnectionConfig, force: Boolean = false) = coroutineScope {
+        val now = SystemClock.elapsedRealtime()
+        val checkProviders = force || providersCheckedAt?.let { now - it >= 300_000 } != false
+        val checkLocal = state.aiMode == "server" && (force || localAiCheckedAt?.let { now - it >= 60_000 } != false)
+        if (!checkProviders && !checkLocal) return@coroutineScope
         val api = CamaraApi(config, fast = true)
-        val providers = async {
+        val providers = if (checkProviders) async {
             runCatching { api.cloudProviders() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
-        }
-        val localStatus = if (state.aiMode == "server") {
+        } else null
+        val localStatus = if (checkLocal) {
             runCatching { api.aiStatus() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
         } else null
-        val cloud = providers.await()
+        val cloud = providers?.await()
         if (state.config == config) {
-            state = state.copy(aiStatus = localStatus, cloudProviders = cloud ?: state.cloudProviders)
+            if (cloud != null) providersCheckedAt = now
+            if (localStatus != null) localAiCheckedAt = now
+            state = state.copy(aiStatus = if (state.aiMode == "server") localStatus ?: state.aiStatus else null,
+                cloudProviders = cloud ?: state.cloudProviders)
         }
     }
 
@@ -145,7 +159,10 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun enqueue(onSuccess: () -> Unit = {}, build: (Snapshot) -> PendingAction) {
         val config = state.config ?: return
-        if (state.busy || state.generating) return
+        if (state.busy || state.generating) {
+            state = state.copy(message = "Se finalizează operația curentă. Încearcă din nou într-un moment.")
+            return
+        }
         state = state.copy(busy = true)
         viewModelScope.launch {
             try {
@@ -360,7 +377,7 @@ class CamaraViewModel(application: Application) : AndroidViewModel(application) 
         state = state.copy(aiMode = mode)
         getApplication<CamaraApplication>().serverAiPresence.settingsChanged()
         if (mode == "server" && state.online) state.config?.let { config ->
-            viewModelScope.launch { refreshAi(config) }
+            viewModelScope.launch { refreshAi(config, force = true) }
         }
     }
 

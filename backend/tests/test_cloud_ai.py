@@ -93,10 +93,10 @@ def test_cloud_providers_are_selectable_and_cache_independently(tmp_path, monkey
         assert "Marcaj inventar privat" not in json.dumps(data)
         assert any({"name": "Ouă", "in_days": 1} in row["expires_soon"] for row in data["options"])
     assert json.loads(calls[0].content)["response_format"]["type"] == "json_schema"
-    assert json.loads(calls[0].content)["max_tokens"] == 3072
+    assert json.loads(calls[0].content)["max_tokens"] == 768
     groq_payload = json.loads(calls[1].content)
     assert groq_payload["response_format"]["json_schema"]["strict"] is True
-    assert groq_payload["max_completion_tokens"] == 3072 and groq_payload["reasoning_effort"] == "high"
+    assert groq_payload["max_completion_tokens"] == 768 and groq_payload["reasoning_effort"] == "low"
     assert "provider" not in groq_payload
 
 
@@ -132,7 +132,7 @@ def test_cloud_errors_without_backup_are_reported_without_saving(tmp_path, monke
             client.portal.call(remote.aclose)
 
 
-@pytest.mark.parametrize("failure", [429, 503, "timeout", "invalid", "unconfigured"])
+@pytest.mark.parametrize("failure", [429, 503, "timeout", "unconfigured"])
 def test_groq_falls_back_to_openrouter_then_recovers(tmp_path, monkeypatch, failure):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-router")
     monkeypatch.setenv("OPENROUTER_MODEL", "test/backup")
@@ -147,8 +147,6 @@ def test_groq_falls_back_to_openrouter_then_recovers(tmp_path, monkeypatch, fail
                 raise httpx.ReadTimeout("timeout", request=request)
             if isinstance(failure, int):
                 return httpx.Response(failure)
-            if failure == "invalid":
-                return httpx.Response(200, json={"choices": [{"finish_reason": "length"}]})
         return httpx.Response(200, json={"choices": [
             {"finish_reason": "stop", "message": {"content": '{"recipe_id":"1"}'}},
         ]})

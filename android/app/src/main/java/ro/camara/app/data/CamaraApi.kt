@@ -37,6 +37,7 @@ data class ServerStatus(val status: String, val version: String, val database: S
     val last_backup_at: String? = null, val backup_error: String? = null)
 
 data class ConnectionReport(val status: ServerStatus, val viaLan: Boolean, val https: Boolean)
+internal data class SnapshotReply(val snapshot: Snapshot?, val etag: String?)
 
 internal fun mayTryOtherRoute(method: String, headersStarted: Boolean): Boolean =
     !headersStarted || method == "GET" || method == "HEAD"
@@ -159,7 +160,33 @@ class CamaraApi(private val config: ConnectionConfig, fast: Boolean = false, pri
         }
     }
 
-    suspend fun snapshot(): Snapshot = json.decodeFromString(request("GET", "/v1/snapshot"))
+    suspend fun snapshot(): Snapshot = checkNotNull(snapshotReply().snapshot)
+    internal suspend fun snapshotReply(etag: String? = null, base: Snapshot? = null): SnapshotReply = withContext(Dispatchers.IO) {
+        fun fetch(tag: String?, snapshot: Snapshot?): SnapshotReply? {
+            val target = url.newBuilder().addPathSegments("v1/snapshot").apply {
+                if (tag != null && snapshot != null) addQueryParameter("since", tag)
+            }.build()
+            val builder = Request.Builder().url(target).header("Authorization", "Bearer ${config.token}")
+            tag?.let { builder.header("If-None-Match", it) }
+            return execute(builder.build()).use { response ->
+                val newTag = response.header("ETag")
+                if (response.code == 304 && tag != null) return@use SnapshotReply(null, newTag ?: tag)
+                if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
+                    401 -> "Cheia de acces nu este corectă. Verifică setările."
+                    429 -> "Prea multe cereri. Reîncearcă puțin mai târziu."
+                    else -> "Sincronizarea nu a reușit (HTTP ${response.code})."
+                })
+                val body = response.body?.string().orEmpty()
+                if (response.header("X-Camara-Snapshot-Mode") != "delta") {
+                    SnapshotReply(json.decodeFromString<Snapshot>(body), newTag)
+                } else if (tag != null && snapshot != null && newTag != null) {
+                    try { SnapshotReply(applySnapshotDelta(json, body, tag, snapshot), newTag) }
+                    catch (_: IllegalArgumentException) { null }
+                } else null
+            }
+        }
+        fetch(etag, base) ?: fetch(null, null) ?: throw IOException("Serverul nu a trimis o copie completă a datelor.")
+    }
     suspend fun aiStatus(): AiStatus = json.decodeFromString(request("GET", "/v1/ai/status"))
     suspend fun cloudProviders(): Map<String, String> = try {
         json.decodeFromString(request("GET", "/v1/ai/providers"))
@@ -219,7 +246,18 @@ class CamaraApi(private val config: ConnectionConfig, fast: Boolean = false, pri
         json.decodeFromString(request("POST", "/v1/personal-recipes/$id/advice", json.encodeToString(RecipeAdviceRequest(goal))))
     internal suspend fun recipeConversation(id: String, input: RecipeConversationRequest): RecipeConversationReply =
         json.decodeFromString(request("POST", "/v1/personal-recipes/$id/conversation", json.encodeToString(input)))
+    internal suspend fun catalogConversation(recipe: Recipe, input: RecipeConversationRequest): RecipeConversationReply =
+        json.decodeFromString(request("POST", "/v1/recipes/conversation", json.encodeToString(CatalogConversation(recipe, input))))
+
+    @Serializable
+    private data class CatalogConversation(val recipe: Recipe, val conversation: RecipeConversationRequest)
     suspend fun useSoonIdeas(): List<UseSoonIdea> = json.decodeFromString(request("GET", "/v1/recipes/use-soon"))
+    internal suspend fun history(kind: HistoryKind, cursor: String?): HistoryRows {
+        // The API returns a URL-safe opaque cursor.
+        require(cursor == null || Regex("[A-Za-z0-9_-]{1,256}").matches(cursor))
+        val query = cursor?.let { "?cursor=$it" }.orEmpty()
+        return json.decodeFromString<HistoryPage>(request("GET", "/v1/history/${kind.path}$query")).rows(kind, json)
+    }
     suspend fun addMissing(id: String) { request("POST", "/v1/recipes/$id/shopping", "{}") }
     suspend fun preview(text: String): BulkPreview = json.decodeFromString(request("POST", "/v1/pantry/preview", json.encodeToString(BulkTextRequest(text))))
     suspend fun importBatch(id: String, items: List<PantryItem>) { request("PUT", "/v1/pantry/batches/$id", json.encodeToString(PantryBatch(items))) }

@@ -35,3 +35,22 @@ def test_catalog_has_concrete_unique_steps_and_valid_servings():
             recipe = prepare(entry, RecipeRequest(servings=servings), [])
             assert recipe.servings == servings
             assert recipe.minutes <= 180
+
+
+def test_shortlist_keeps_full_catalog_order_without_materializing_every_draft(monkeypatch):
+    from app import catalog
+
+    pantry = [item(name, 5, "buc") for name in ("Ouă", "Roșii", "Cartofi", "Morcov", "Banane")]
+    request = RecipeRequest(max_minutes=120, equipment=["plita", "tigaie", "oala", "cuptor", "microunde"])
+    ordered = candidates(request, pantry, limit=None)
+    assert len(ordered) > 5
+    original = catalog.prepare_with_stock
+    built = []
+
+    def count(entry, *args):
+        built.append(entry.id)
+        return original(entry, *args)
+
+    monkeypatch.setattr(catalog, "prepare_with_stock", count)
+    assert candidates(request, pantry, limit=5) == ordered[:5]
+    assert built == [entry.id for entry, _ in ordered[:5]]

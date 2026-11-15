@@ -7,6 +7,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ro.camara.app.data.RecipeWebImport
 
@@ -18,7 +19,9 @@ internal fun RecipeSourceDialog(initialLink: String, photoAvailable: Boolean, ph
     var error by remember { mutableStateOf<String?>(null) }
     val busy = loading || photoReading
     val scope = rememberCoroutineScope()
-    AlertDialog(onDismissRequest = { if (!busy) onDismiss() }, title = { Text("Importă din link sau fotografie") }, text = {
+    var job by remember { mutableStateOf<Job?>(null) }
+    val dismiss = { job?.cancel(); onDismiss() }
+    AlertDialog(onDismissRequest = dismiss, title = { Text("Importă din link sau fotografie") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(link, { link = it.take(2048); error = null }, label = { Text("Link către rețetă") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !busy)
@@ -34,7 +37,7 @@ internal fun RecipeSourceDialog(initialLink: String, photoAvailable: Boolean, ph
         TextButton(enabled = link.isNotBlank() && !busy, onClick = {
             loading = true
             error = null
-            scope.launch {
+            job = scope.launch {
                 try {
                     onText(RecipeWebImport.load(link))
                 } catch (e: CancellationException) {
@@ -46,5 +49,5 @@ internal fun RecipeSourceDialog(initialLink: String, photoAvailable: Boolean, ph
                 }
             }
         }) { Text(if (loading) "Se citește…" else "Citește linkul") }
-    }, dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Închide") } })
+    }, dismissButton = { TextButton(onClick = dismiss) { Text("Închide") } })
 }

@@ -101,6 +101,7 @@ data class Snapshot(
     val stock_tools: Boolean = false,
     val epoch: String = "",
     val restored_at: String? = null,
+    val collection_revisions: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -141,11 +142,13 @@ data class FoodEvent(val id: String, val kind: String, val title: String, val oc
 @Serializable
 data class Change(val kind: String, val id: String, val before: JsonObject? = null, val after: JsonObject? = null)
 @Serializable
-data class Mutation(val label: String, val changes: List<Change>, val guards: Map<String, List<JsonObject>> = emptyMap(), val epoch: String = "")
+@OptIn(ExperimentalSerializationApi::class)
+data class Mutation(val label: String, val changes: List<Change>, val guards: Map<String, List<JsonObject>> = emptyMap(), val epoch: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val guard_revisions: Map<String, String> = emptyMap())
 @Serializable
 data class PendingAction(val id: String, val mutation: Mutation, val rebasable: Boolean = true, val issue: String? = null)
 @Serializable
-data class LocalState(val server: Snapshot = Snapshot(), val savedAt: Long? = null, val pending: List<PendingAction> = emptyList(), val revision: Long = 0) {
+data class LocalState(val server: Snapshot = Snapshot(), val savedAt: Long? = null, val pending: List<PendingAction> = emptyList(), val revision: Long = 0, val etag: String? = null) {
     fun projected() = pending.asSequence().filterNot { staleEpoch(it, server) }.takeWhile { it.issue == null }
         .fold(server) { result, action -> ActionRules.apply(result, action.mutation) }
 }

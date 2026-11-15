@@ -346,6 +346,7 @@ class Mutation(Model):
     changes: list[Change] = Field(min_length=1, max_length=200)
     guards: dict[RecordKind, list[dict[str, Any]]] = Field(default_factory=dict)
     epoch: str = ""
+    guard_revisions: dict[RecordKind, Annotated[str, StringConstraints(pattern=r"^[0-9]{1,19}$")]] = Field(default_factory=dict)
 
 
 class MutationResult(Model):
@@ -370,6 +371,7 @@ class Snapshot(Model):
     stock_tools: bool = True
     epoch: str = ""
     restored_at: str | None = None
+    collection_revisions: dict[str, str] = Field(default_factory=dict)
 
 
 class AiStatus(Model):

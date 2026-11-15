@@ -23,10 +23,11 @@ import shutil
 import sys
 import urllib.request
 from uuid import UUID
+from app.request_limits import secret_setting
 
 request = urllib.request.Request(
     'http://127.0.0.1:8080/v1/backups', data=b'',
-    headers={'Authorization': 'Bearer ' + os.environ['CAMARA_API_KEY']},
+    headers={'Authorization': 'Bearer ' + secret_setting('CAMARA_API_KEY')},
 )
 with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=120) as response:
     info = json.load(response)

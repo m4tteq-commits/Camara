@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 launch {
                     val connectivity = getSystemService(ConnectivityManager::class.java)
                     connectivity.defaultNetworks().collectLatest { network ->
@@ -92,9 +92,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 launch {
+                    var seconds = 30L
                     while (true) {
-                        delay(30_000)
+                        delay(seconds * 1_000)
                         model.refresh(silent = true)
+                        snapshotFlow { !model.state.syncing }.first { it }
+                        seconds = if (model.state.online) 30L else (seconds * 2).coerceAtMost(300L)
                     }
                 }
             }

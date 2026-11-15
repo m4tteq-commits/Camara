@@ -134,7 +134,32 @@ def test_schema_migration_preserves_previous_data_and_restarts(tmp_path):
     assert migrated.snapshot().pantry == [item]
     assert Database(path).snapshot().pantry == [item]
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 6
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 8
+
+
+def test_schema_six_upgrade_keeps_confirmed_action_and_record(tmp_path):
+    path = tmp_path / "schema-six.db"
+    item = PantryItem(id=uuid4(), name="Lapte", quantity=1, unit="l")
+    action_id = str(uuid4())
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+            CREATE TABLE pantry (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE mutations (id TEXT PRIMARY KEY, digest TEXT NOT NULL);
+            CREATE TABLE pantry_batches (id TEXT PRIMARY KEY, digest TEXT NOT NULL, count INTEGER NOT NULL);
+            CREATE TABLE recommendations (key TEXT PRIMARY KEY, recipe_id TEXT NOT NULL);
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata VALUES ('epoch', 'test-epoch');
+            PRAGMA user_version=6;
+        """)
+        db.execute("INSERT INTO pantry VALUES (?,?)", (str(item.id), item.model_dump_json()))
+        db.execute("INSERT INTO mutations VALUES (?,?)", (action_id, "confirmed"))
+    first = Database(path)
+    assert first.snapshot().pantry == [item]
+    assert first.snapshot().epoch == "test-epoch"
+    second = Database(path)
+    with second.readonly_connection() as db:
+        assert db.execute("SELECT id,digest FROM mutations").fetchall() == [(action_id, "confirmed")]
+        assert db.execute("SELECT version FROM migrations ORDER BY version").fetchall() == [(7,), (8,)]
 
 
 def test_shopping_calculation_detects_new_items_from_another_device(client):

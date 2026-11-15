@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 
 
 class PreferenceConfirmation(ValueError):
@@ -28,7 +29,12 @@ CONFIRM_FILTERS = "Confirmă ingredientele în «Filtre și echipamente», apoi 
 
 
 def contains_phrase(text: str, phrase: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
+    return phrase_pattern(phrase).search(text) is not None
+
+
+@lru_cache(maxsize=1024)
+def phrase_pattern(phrase):
+    return re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)")
 
 
 def matches_ingredient(term: str, part: str) -> bool:

@@ -54,9 +54,9 @@ def test_server_status_reports_database_and_latest_backup_without_ai(tmp_path):
     path = tmp_path / "status.db"
     with TestClient(create_app(path, KEY, object()), headers=HEADERS) as c:
         c.put("/v1/backups/settings", json={"enabled": False}).raise_for_status()
-        assert c.get("/health").raise_for_status().json() == {"status": "ok", "version": "0.9.8"}
+        assert c.get("/health").raise_for_status().json() == {"status": "ok", "version": "0.9.12"}
         before = c.get("/v1/status").raise_for_status().json()
-        assert before["database"] == "ready" and before["schema_version"] == 6
+        assert before["database"] == "ready" and before["schema_version"] == 8
         backup = c.post("/v1/backups").raise_for_status().json()
         assert c.get("/v1/status").raise_for_status().json()["last_backup_at"] == backup["created_at"]
         with sqlite3.connect(path) as connection:
@@ -71,13 +71,14 @@ def test_pantry_shared_between_clients_and_persists(tmp_path):
     item = {"name": " Ouă ", "quantity": 6, "unit": "buc", "expires_on": "2026-11-05"}
     with TestClient(create_app(db, KEY, FakeAi()), headers=HEADERS) as phone:
         assert phone.put(f"/v1/pantry/{item_id}", json=item).status_code == 200
-        assert phone.put(f"/v1/pantry/{item_id}", json={**item, "quantity": 4}).status_code == 200
+        path = f"/v1/pantry/{item_id}"
+        assert phone.put(path, json={**item, "quantity": 4}, headers=revision(phone, path)).status_code == 200
     with TestClient(create_app(db, KEY, FakeAi()), headers=HEADERS) as tablet:
         pantry = tablet.get("/v1/snapshot").json()["pantry"]
         assert len(pantry) == 1
         assert pantry[0]["name"] == "Ouă"
         assert pantry[0]["quantity"] == 4
-        assert tablet.delete(f"/v1/pantry/{item_id}").status_code == 204
+        assert tablet.delete(path, headers=revision(tablet, path)).status_code == 204
         assert tablet.get("/v1/snapshot").json()["pantry"] == []
 
 
@@ -99,8 +100,48 @@ def test_recipe_to_shopping_is_idempotent(client):
     assert item["name"] == "roșii"
     update = {k: v for k, v in item.items() if k != "id"}
     update["checked"] = True
-    assert client.put(f"/v1/shopping/{item['id']}", json=update).json()["checked"]
-    assert client.delete(f"/v1/shopping/{item['id']}").status_code == 204
+    path = f"/v1/shopping/{item['id']}"
+    assert client.put(path, json=update, headers=revision(client, path)).json()["checked"]
+    assert client.delete(path, headers=revision(client, path)).status_code == 204
+
+
+def revision(client, path):
+    return {"X-Camara-If-Unmodified": client.get(path).raise_for_status().headers["X-Camara-Revision"]}
+
+
+def test_two_clients_cannot_overwrite_the_same_record(client):
+    path = f"/v1/pantry/{uuid4()}"
+    client.put(path, json={"name": "Lapte", "quantity": 2}).raise_for_status()
+    before = revision(client, path)
+    client.put(path, json={"name": "Lapte", "quantity": 3}, headers=before).raise_for_status()
+    assert client.put(path, json={"name": "Lapte", "quantity": 4}, headers=before).status_code == 409
+    assert client.delete(path, headers=before).status_code == 409
+    assert client.delete(path).status_code == 428
+    assert client.get(path).json()["quantity"] == 3
+
+
+def test_snapshot_short_circuits_unchanged_requests(client):
+    first = client.get("/v1/snapshot").raise_for_status()
+    previous = first.headers["ETag"]
+    headers = {"If-None-Match": previous}
+    for _ in range(10):
+        unchanged = client.get("/v1/snapshot", headers=headers)
+        assert unchanged.status_code == 304 and not unchanged.content
+    client.put(f"/v1/pantry/{uuid4()}", json={"name": "Lapte", "quantity": 2}).raise_for_status()
+    updated = client.get("/v1/snapshot", headers=headers).raise_for_status()
+    assert updated.headers["ETag"] != previous and len(updated.json()["pantry"]) == 1
+    assert client.get("/v1/snapshot").content == updated.content
+
+
+def test_request_limits_and_liveness(client):
+    assert client.get("/livez", headers={"Authorization": ""}).json() == {"ok": True}
+    path = f"/v1/actions/{uuid4()}"
+    assert client.put(path, content=b"x", headers={"Content-Length": "20000000"}).status_code == 413
+    assert client.put(path, content=iter([b"x" * 2**20] * 3)).status_code == 413
+    for _ in range(20):
+        assert client.get("/v1/snapshot", headers={"Authorization": "Bearer invalid"}).status_code == 401
+    assert client.get("/v1/snapshot", headers={"Authorization": "Bearer invalid"}).status_code == 429
+    assert client.get("/v1/snapshot").status_code == 200
 
 
 def test_missing_recipe(client):

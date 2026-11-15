@@ -4,9 +4,17 @@ services:
     build: ./backend
     restart: unless-stopped
     ports:
-      - "${CAMARA_PORT:-8088}:8080"
+      - "${CAMARA_BIND_ADDRESS:-127.0.0.1}:${CAMARA_PORT:-8088}:8080"
+    mem_limit: 1g
+    cpus: 2.0
+    logging: &camara_logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
-      CAMARA_API_KEY: ${CAMARA_API_KEY:?Seteaza CAMARA_API_KEY in .env}
+      CAMARA_API_KEY: ${CAMARA_API_KEY:-}
+      CAMARA_PREVIOUS_API_KEY: ${CAMARA_PREVIOUS_API_KEY:-}
       CAMARA_DB_PATH: /data/camara.db
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:2b}
@@ -28,9 +36,8 @@ services:
         - python
         - -c
         - >-
-          import os, urllib.request;
-          req = urllib.request.Request('http://127.0.0.1:8080/health', headers={'Authorization': 'Bearer ' + os.environ['CAMARA_API_KEY']});
-          urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=3).close()
+          import urllib.request;
+          urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8080/livez', timeout=3).close()
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -42,6 +49,9 @@ services:
   ollama:
     image: ollama/ollama:0.40.13
     restart: unless-stopped
+    mem_limit: 6g
+    cpus: 2.0
+    logging: *camara_logging
     environment:
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_MAX_LOADED_MODELS: "1"

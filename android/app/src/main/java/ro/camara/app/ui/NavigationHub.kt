@@ -20,8 +20,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MoreScreen(
-    onNavigate: (Int) -> Unit,
+internal fun MoreScreen(
+    onNavigate: (Destination) -> Unit,
     modifier: Modifier,
     appearance: CamaraAppearance = CamaraAppearance(),
     onAppearance: () -> Unit = {},
@@ -44,22 +44,23 @@ fun MoreScreen(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(cardGap)) {
                 HubShortcut("Planul meselor", "Vezi săptămâna", Icons.Outlined.CalendarMonth,
-                    colors.primaryContainer, colors.onPrimaryContainer, colors.primary, Modifier.weight(1f), onClick = { onNavigate(3) })
+                    colors.primaryContainer, colors.onPrimaryContainer, colors.primary, Modifier.weight(1f), onClick = { onNavigate(Destination.Plan) })
                 HubShortcut("În magazin", "Deschide coșul", Icons.Outlined.ShoppingCart,
-                    colors.secondaryContainer, colors.onSecondaryContainer, colors.secondary, Modifier.weight(1f), storeEnabled) { onNavigate(10) }
+                    colors.secondaryContainer, colors.onSecondaryContainer, colors.secondary, Modifier.weight(1f), storeEnabled) { onNavigate(Destination.InStore) }
             }
         }
         item {
             HubGroup("Mese", listOf(
-                HubEntry("Plan automat", "Mese și cumpărături în limita bugetului", Icons.Outlined.AutoAwesome) { onNavigate(12) },
-                HubEntry("Porții gătite", "Mâncare pregătită pentru alte zile", Icons.Outlined.TakeoutDining) { onNavigate(11) },
+                HubEntry("Plan automat", "Mese și cumpărături în limita bugetului", Icons.Outlined.AutoAwesome) { onNavigate(Destination.Automatic) },
+                HubEntry("Porții gătite", "Mâncare pregătită pentru alte zile", Icons.Outlined.TakeoutDining) { onNavigate(Destination.Prepared) },
             ))
         }
         item {
             HubGroup("Cumpărături și buget", listOf(
-                HubEntry("Catalog", "Produse și coduri de bare", Icons.Outlined.QrCodeScanner) { onNavigate(7) },
-                HubEntry("Bonuri", "Adaugă o fotografie sau vezi istoricul", Icons.Outlined.ReceiptLong) { onNavigate(8) },
-                HubEntry("Buget și risipă", "Cheltuieli, consum și istoric", Icons.Outlined.AccountBalanceWallet) { onNavigate(4) },
+                HubEntry("Catalog", "Produse și coduri de bare", Icons.Outlined.QrCodeScanner) { onNavigate(Destination.Products) },
+                HubEntry("Bonuri", "Adaugă o fotografie sau vezi istoricul", Icons.Outlined.ReceiptLong) { onNavigate(Destination.Receipts) },
+                HubEntry("Buget și risipă", "Cheltuieli, consum și istoric", Icons.Outlined.AccountBalanceWallet) { onNavigate(Destination.Budget) },
+                HubEntry("Istoric", "Bonuri, cumpărături, cheltuieli și consum", Icons.Outlined.History) { onNavigate(Destination.History) },
             ))
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -67,7 +68,7 @@ fun MoreScreen(
                 HubEntry("Teme și aspect", "${appearance.palette.label} · ${appearance.mode.label}", Icons.Outlined.Palette, onClick = onAppearance),
                 HubEntry("Notificări", "Rezumatul alimentelor și termenele", Icons.Outlined.NotificationsNone, onClick = onReminders),
                 HubEntry("Serverul meu", "Adresă și conexiune", Icons.Outlined.Dns, serverEnabled, onServer),
-                HubEntry("Backup și restaurare", "Copii ale datelor de pe server", Icons.Outlined.Backup) { onNavigate(9) },
+                HubEntry("Backup și restaurare", "Copii ale datelor de pe server", Icons.Outlined.Backup) { onNavigate(Destination.Backups) },
             ))
         }
     }

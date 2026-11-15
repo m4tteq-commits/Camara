@@ -61,14 +61,14 @@ fun ConnectionForm(config: ConnectionConfig?, busy: Boolean, lastSync: Long?, on
     var testing by remember { mutableStateOf(false) }
     var report by remember { mutableStateOf<ConnectionReport?>(null) }
     val scope = rememberCoroutineScope()
-    val lan = editedLan ?: ConnectionConfig.defaultLanAddress(url).orEmpty()
+    val lan = editedLan.orEmpty()
     val enabled = !busy && !testing
     val canConnect = enabled && url.isNotBlank() && token.isNotBlank()
     fun clearResult() { report = null; error = null }
     fun candidate() = runCatching { ConnectionConfig(url, token, lanAddress = lan.ifBlank { null }).validated() }
         .onFailure { error = it.message }.getOrNull()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        OutlinedTextField(url, { url = it; clearResult() }, label = { Text("Adresa serverului") }, placeholder = { Text("https://camara-m4tteq.duckdns.org") },
+        OutlinedTextField(url, { url = it; clearResult() }, label = { Text("Adresa serverului") }, placeholder = { Text("https://serverul-tău.example") },
             singleLine = true, enabled = enabled, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
         OutlinedTextField(lan, { editedLan = it; clearResult() }, label = { Text("IP LAN · opțional") },
             supportingText = { Text("Conectare locală cu același certificat HTTPS.") }, singleLine = true,

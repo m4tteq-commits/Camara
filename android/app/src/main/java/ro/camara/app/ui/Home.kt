@@ -39,8 +39,8 @@ internal fun nextPlannedMeal(meals: List<MealPlan>, today: LocalDate): MealPlan?
 }
 
 @Composable
-fun TodayScreen(state: UiState, onNavigate: (Int) -> Unit, onBarcode: () -> Unit, onReceipt: () -> Unit, modifier: Modifier,
-    onAdd: () -> Unit = {}, onReviewTerms: () -> Unit = { onNavigate(0) }, onOpenMeal: (String) -> Unit = { onNavigate(3) }) {
+internal fun TodayScreen(state: UiState, onNavigate: (Destination) -> Unit, onBarcode: () -> Unit, onReceipt: () -> Unit, modifier: Modifier,
+    onAdd: () -> Unit = {}, onReviewTerms: () -> Unit = { onNavigate(Destination.Pantry) }, onOpenMeal: (String) -> Unit = { onNavigate(Destination.Plan) }) {
     val today = LocalDate.now()
     val snapshot = state.snapshot
     val soon = remember(snapshot.pantry, today) { RecipeMath.expiring(snapshot.pantry, today) }
@@ -64,7 +64,7 @@ fun TodayScreen(state: UiState, onNavigate: (Int) -> Unit, onBarcode: () -> Unit
                     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(cardGap)) {
                         TodayQuickAction("Adaugă aliment", Icons.Outlined.Add, Modifier.weight(1f), canWrite, onAdd)
                         TodayQuickAction("Adaugă bon", Icons.AutoMirrored.Outlined.ReceiptLong, Modifier.weight(1f), canWrite, onReceipt)
-                        TodayQuickAction("Plan automat", Icons.Outlined.AutoAwesome, Modifier.weight(1f), canWrite) { onNavigate(12) }
+                        TodayQuickAction("Plan automat", Icons.Outlined.AutoAwesome, Modifier.weight(1f), canWrite) { onNavigate(Destination.Automatic) }
                     }
                 }
             }
@@ -85,7 +85,7 @@ fun TodayScreen(state: UiState, onNavigate: (Int) -> Unit, onBarcode: () -> Unit
                         style = MaterialTheme.typography.bodySmall)
                     if (expired > 0) Text(countLabel(expired, "aliment cu termen depășit", "alimente cu termen depășit"),
                         style = MaterialTheme.typography.bodySmall)
-                    if (soon.isNotEmpty()) TextButton(onClick = { onNavigate(14) }) {
+                    if (soon.isNotEmpty()) TextButton(onClick = { onNavigate(Destination.UseSoon) }) {
                         Icon(Icons.Outlined.RestaurantMenu, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Gătește cu ce expiră")
@@ -101,24 +101,24 @@ fun TodayScreen(state: UiState, onNavigate: (Int) -> Unit, onBarcode: () -> Unit
                 "$date · $slot · ${portionsLabel(it.servings)}"
             } ?: "Alege o rețetă pentru următoarea masă."
             TodayLink("Următoarea masă", title, detail, Icons.Outlined.RestaurantMenu,
-                { if (next == null) onNavigate(1) else onOpenMeal(next.on_date) })
+                { if (next == null) onNavigate(Destination.Recipes) else onOpenMeal(next.on_date) })
         }
         item(key = "shopping") {
             val detail = if (shopping.isEmpty()) "Toate cumpărăturile sunt la zi."
                 else shopping.take(3).joinToString(" · ") { it.name } + if (shopping.size > 3) " · +${shopping.size - 3}" else ""
             TodayLink("Cumpărături", countLabel(shopping.size, "produs de cumpărat", "produse de cumpărat"),
-                detail, Icons.Outlined.ShoppingBasket, { onNavigate(2) })
+                detail, Icons.Outlined.ShoppingBasket, { onNavigate(Destination.Shopping) })
         }
         if (restock > 0) item(key = "restock") {
             TodayLink(null, "Reaprovizionare", countLabel(restock, "aliment sub prag", "alimente sub prag"),
-                Icons.Outlined.Inventory2, { onNavigate(13) })
+                Icons.Outlined.Inventory2, { onNavigate(Destination.Minimums) })
         }
         if (prepared.isNotEmpty()) item(key = "prepared") {
             TodayLink(null, "Porții gătite", prepared.take(2).joinToString(" · ") { it.recipe.title },
-                Icons.Outlined.TakeoutDining, { onNavigate(11) })
+                Icons.Outlined.TakeoutDining, { onNavigate(Destination.Prepared) })
         }
         item(key = "budget") {
-            Card(onClick = { onNavigate(4) }, modifier = Modifier.padding(top = sectionGap - cardGap),
+            Card(onClick = { onNavigate(Destination.Budget) }, modifier = Modifier.padding(top = sectionGap - cardGap),
                 shape = MaterialTheme.shapes.medium, border = cardOutline(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest)) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {

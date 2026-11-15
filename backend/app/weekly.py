@@ -74,12 +74,18 @@ def price_book(snapshot, request):
     return quotes
 
 
-def needs(snapshot, meals):
-    remaining, stock = {}, defaultdict(list)
+def pantry_index(snapshot):
+    quantities, stock = {}, defaultdict(list)
     for item in sorted(snapshot.pantry, key=lambda row: (row.expires_on or date.max, str(row.id))):
         quantity, unit = base(item.quantity, item.unit)
-        remaining[item.id] = quantity
+        quantities[item.id] = quantity
         stock[(canonical(item.name), unit)].append(item)
+    return quantities, stock
+
+
+def needs(snapshot, meals, indexed_stock=None):
+    quantities, stock = indexed_stock if indexed_stock is not None else pantry_index(snapshot)
+    remaining = quantities.copy()
     result = {}
     for meal in sorted((row for row in meals if not row.completed and row.prepared_batch_id is None), key=lambda row: (row.on_date, row.slot, str(row.id))):
         for part in meal.recipe.ingredients:
@@ -105,9 +111,9 @@ def needs(snapshot, meals):
     return result
 
 
-def estimate(snapshot, meals, quotes):
+def estimate(snapshot, meals, quotes, indexed_stock=None):
     lines = []
-    for (key, unit), (name, required) in needs(snapshot, meals).items():
+    for (key, unit), (name, required) in needs(snapshot, meals, indexed_stock).items():
         quote = quotes.get((key, unit))
         package, cents, source = quote or (100 if unit in {'g', 'ml'} else 1, None, 'Preț necunoscut')
         count = max(1, math.ceil(round(required / package, 8)))
@@ -130,28 +136,16 @@ def options(snapshot, request, slot):
             if not entry.unmeasured and not excluded.intersection(canonical(part.name) for part in draft.ingredients)]
 
 
-def ai_options(snapshot, request):
-    # The AI ranks safe candidates; arithmetic and the final budget stay deterministic.
-    quotes = price_book(snapshot, request)
-    available = options(snapshot, request, request.slots[0])
-    rows = []
-    for entry, draft in available:
-        recipe = Recipe(**draft.model_dump(), id=uuid5(request.id, entry.id), model='Plan automat', generated_at='', generation_ms=0)
-        meal = MealPlan(id=uuid5(request.id, 'ai-' + entry.id), on_date=request.start, recipe=recipe, servings=request.servings)
-        lines = estimate(snapshot, [meal], quotes)
-        known = sum(row['estimated_cents'] or 0 for row in lines)
-        unknown = sum(row['estimated_cents'] is None for row in lines)
-        rows.append((unknown, known, entry.id, {'id': entry.id, 'title': draft.title, 'minutes': draft.minutes, 'known_cents': known, 'unknown_prices': unknown}))
-    rows.sort(key=lambda row: (row[0], row[1]))
-    return [row[3] for row in rows[:5]]
-
-
 def prepared_signature(recipe):
     return recipe.title, frozenset(canonical(part.name) for part in recipe.ingredients), tuple(recipe.steps)
 
 
-def preview(snapshot, request, seed='', ai_used=False, ai_note='', economical=False):
-    quotes = price_book(snapshot, request)
+def preview(snapshot, request, seed='', ai_used=False, *, tie_options=None):
+    return _preview(snapshot, request, seed, ai_used, price_book(snapshot, request),
+                    pantry_index(snapshot), {}, tie_options)
+
+
+def _preview(snapshot, request, seed, ai_used, quotes, indexed_stock, choices_by_category, tie_options, economical=False):
     end = request.start + timedelta(days=request.days - 1)
     fixed = [row for row in snapshot.plans if request.start <= row.on_date <= end]
     meals = list(fixed)
@@ -161,13 +155,23 @@ def preview(snapshot, request, seed='', ai_used=False, ai_note='', economical=Fa
     for meal in snapshot.plans:
         if meal.prepared_batch_id and not meal.completed:
             reserved[str(meal.prepared_batch_id)] += meal.servings
-    targets = [(request.start + timedelta(days=day), slot) for day in range(request.days) for slot in request.slots
-               if not any(row.on_date == request.start + timedelta(days=day) and row.slot == slot for row in fixed)]
-    eligible = {slot: options(snapshot, request, slot) for slot in dict.fromkeys(slot for _, slot in targets)}
+    occupied = {(meal.on_date, meal.slot) for meal in fixed}
+    days = [request.start + timedelta(days=offset) for offset in range(request.days)]
+    targets = [(day, slot) for day in days for slot in request.slots if (day, slot) not in occupied]
+    eligible = {}
+    for slot in dict.fromkeys(slot for _, slot in targets):
+        category = "breakfast" if slot == "breakfast" else "main"
+        if category not in choices_by_category:
+            choices_by_category[category] = options(snapshot, request, slot)
+        eligible[slot] = choices_by_category[category]
     signatures = {slot: {prepared_signature(draft) for _, draft in choices} for slot, choices in eligible.items()}
     batches = [(row, prepared_signature(row.recipe)) for row in snapshot.prepared]
     dated_stock = [(item.expires_on, (canonical(item.name), base(item.quantity, item.unit)[1]))
                    for item in snapshot.pantry if item.expires_on is not None]
+    expiring_by_day = {day: Counter(identity for expiry, identity in dated_stock if day <= expiry <= day + timedelta(days=3))
+                       for day in dict.fromkeys(day for day, _ in targets)}
+    parts_by_entry = {entry.id: {(canonical(name), unit) for name, _, unit in entry.parts if canonical(name) != 'apa'}
+                      for choices in eligible.values() for entry, _ in choices}
     warnings = []
     for day, slot in targets:
         prepared = sorted((row for row, signature in batches if signature in signatures[slot] and row.cooked_on <= day <= row.expires_on and
@@ -183,27 +187,36 @@ def preview(snapshot, request, seed='', ai_used=False, ai_note='', economical=Fa
                 recipe = Recipe(**draft.model_dump(), id=uuid5(request.id, f'{day}-{slot}-{entry.id}'), model='Plan automat · catalog verificat',
                                 generated_at=datetime.now(timezone.utc).isoformat(), generation_ms=0)
                 meal = MealPlan(id=uuid5(request.id, f'{day}-{slot}'), on_date=day, slot=slot, recipe=recipe, servings=request.servings)
-                lines = estimate(snapshot, [*meals, meal], quotes)
+                lines = estimate(snapshot, [*meals, meal], quotes, indexed_stock)
                 known = sum(row['estimated_cents'] or 0 for row in lines)
                 unknown = sum(row['estimated_cents'] is None for row in lines)
-                parts = {(canonical(name), unit) for name, _, unit in entry.parts if canonical(name) != 'apa'}
-                expiry_match = sum(1 for expiry, identity in dated_stock if day <= expiry <= day + timedelta(days=3) and identity in parts)
+                expiry_match = sum(expiring_by_day[day][part] for part in parts_by_entry[entry.id])
                 score = (known > request.budget_cents, unknown, counts[draft.title], -expiry_match, 0 if entry.id == seed else 1, known, draft.minutes, entry.id)
                 if economical:
                     score = (known > request.budget_cents, unknown, known, counts[draft.title], -expiry_match, 0 if entry.id == seed else 1, draft.minutes, entry.id)
-                trials.append((score, meal))
+                choice = {'id': entry.id, 'title': draft.title, 'minutes': draft.minutes,
+                          'known_cents': known, 'unknown_prices': unknown} if tie_options is not None and not tie_options else None
+                trials.append((score, meal, choice))
             if not trials:
                 warnings.append(f'{day} · {slot}: nu există o rețetă pentru timpul și echipamentele alese.')
                 continue
-            selected = min(trials, key=lambda row: row[0])[1]
+            winning_score, selected, _ = min(trials, key=lambda row: row[0])
+            if tie_options is not None and not tie_options:
+                # A model may only reorder meals tied on the criteria before the seed.
+                criteria = 5 if economical else 4
+                ties = [row for row in trials if row[0][:criteria] == winning_score[:criteria]]
+                if len(ties) > 1:
+                    tie_options.extend(row[2] for row in sorted(ties, key=lambda row: row[0])[:5])
         meals.append(selected)
         proposed.append(selected)
         counts[selected.recipe.title] += 1
-    lines = estimate(snapshot, meals, quotes)
+    lines = estimate(snapshot, meals, quotes, indexed_stock)
     unknown = sum(row['estimated_cents'] is None for row in lines)
     known = sum(row['estimated_cents'] or 0 for row in lines)
     if known > request.budget_cents and not economical:
-        return preview(snapshot, request, seed, ai_used, ai_note, economical=True)
+        if tie_options is not None:
+            tie_options.clear()
+        return _preview(snapshot, request, seed, ai_used, quotes, indexed_stock, choices_by_category, tie_options, economical=True)
     manual_quantities = {part.name for meal in meals if not meal.completed and meal.prepared_batch_id is None
                          for part in meal.recipe.ingredients if canonical(part.name) != "apa" and base_amount(part.quantity) is None}
     total = None if unknown or manual_quantities else known
@@ -213,8 +226,6 @@ def preview(snapshot, request, seed='', ai_used=False, ai_note='', economical=Fa
         warnings.append('Completează prețurile necunoscute și recalculează înainte de confirmare.')
     if known > request.budget_cents:
         warnings.append('Propunerea depășește bugetul. Ajustează suma, mesele sau prețurile și recalculează.')
-    if ai_note:
-        warnings.append(ai_note)
     changes = [Change(kind='plans', id=meal.id, after=meal.model_dump(mode='json')) for meal in proposed]
     for line in lines:
         compatible = []

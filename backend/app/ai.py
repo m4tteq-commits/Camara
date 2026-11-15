@@ -26,10 +26,16 @@ logger = logging.getLogger(__name__)
 
 
 class AiError(Exception):
-    def __init__(self, detail: str, status_code: int = 503):
+    def __init__(self, detail: str, status_code: int = 503, *, retryable: bool = True):
         self.detail = detail
         self.status_code = status_code
+        self.retryable = retryable
         super().__init__(detail)
+
+
+def prompt_key(model, system, data):
+    return hashlib.sha256(json.dumps(["prompt-v1", model, system, data], ensure_ascii=False,
+                                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def selection_context(request: RecipeRequest, pantry: list[PantryItem], personal_recipes=()):
@@ -37,21 +43,23 @@ def selection_context(request: RecipeRequest, pantry: list[PantryItem], personal
     usable = unexpired_stock(pantry, today)
     if not usable:
         raise AiError("Adaugă cel puțin un aliment neexpirat în cămară.", 422)
+    due = expiring_stock(usable, today)
+    prioritize_expiry = bool(due) and "expir" in normalize(request.preferences)
     try:
-        options = candidates(request, usable, personal_recipes, limit=None)
+        options = candidates(request, usable, personal_recipes, limit=None if prioritize_expiry else 5)
     except PreferenceConfirmation as exc:
         raise AiError(str(exc), 422) from exc
     if not options:
         raise AiError("Nu există o rețetă care să respecte alimentele, timpul și filtrele alese. Încearcă alte opțiuni.", 422)
-    due = expiring_stock(usable, today)
-    if due and "expir" in normalize(request.preferences):
+    if prioritize_expiry:
         def urgency(option):
             matched = expiring_ingredients(option[1], due)
             return matched[0].expires_on if matched else datetime.max.date()
         options.sort(key=urgency)
     choices = {entry.id: recipe for entry, recipe in options[:5]}
     stock = sorted((p.model_dump(mode="json", exclude={"id"}) for p in usable), key=lambda x: json.dumps(x, sort_keys=True))
-    personal = sorted((item.model_dump(mode='json') for item in personal_recipes), key=lambda item: item['id'])
+    personal = sorted((item.model_dump(mode='json', exclude={"notes", "favorite", "collections", "actual_minutes", "updated_at"})
+                       for item in personal_recipes), key=lambda item: item['id'])
     fingerprint = hashlib.sha256(json.dumps({"selection": 3, "catalog": CATALOG_DIGEST, "personal": personal,
                                              "day": str(today), "request": request.model_dump(), "stock": stock}, sort_keys=True).encode()).hexdigest()
     lines = []
@@ -155,14 +163,19 @@ class OllamaProvider:
                 self.refresh_at = 0
 
     async def manage_activity(self):
+        failures = 0
         while True:
             self.wake.clear()
             try:
                 await self.reconcile()
+                failures = 0
             except (httpx.HTTPError, ValueError):
-                logger.warning("AI memory management unavailable; retrying. Ollama idle timeout remains active.")
+                failures += 1
+                if failures == 1:
+                    logger.warning("AI memory management unavailable; retrying with backoff.")
             try:
-                await asyncio.wait_for(self.wake.wait(), 5)
+                timeout = min(60, 5 * 2 ** min(failures, 4)) if failures else (None if self.unloaded and not self.leases else 5)
+                await asyncio.wait_for(self.wake.wait(), timeout)
             except TimeoutError:
                 pass
 
@@ -206,7 +219,7 @@ class OllamaProvider:
         if personal_recipes is None:
             personal_recipes = await asyncio.to_thread(self.database.records, "personal_recipes") if self.database else ()
         context, choices = await asyncio.to_thread(selection_context, request, pantry, personal_recipes)
-        key = hashlib.sha256(f"{self.model}|{context.fingerprint}".encode()).hexdigest()
+        key = prompt_key(self.model, RECIPE_SELECTION_RULES, context.prompt)
         cached = await asyncio.to_thread(self.database.cached_choice, key) if self.database else self.memory_cache.get(key)
         if cached == "none" and context.allow_none:
             raise AiError("Nicio opțiune din colecție nu se potrivește preferințelor. Încearcă alte filtre.", 422)

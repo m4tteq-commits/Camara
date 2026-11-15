@@ -23,7 +23,15 @@ Alternativ, generează cheia pe PC cu Python: `python -c "import secrets; print(
 
 Editează `.env` și completează `CAMARA_API_KEY` cu rezultatul. Nu trimite cheia în chat și nu o comite în Git. `.env` este exclus prin `.gitignore`.
 
-La actualizare, păstrează cheia existentă și volumele. Pe serverul configurat în această sesiune, proiectul este în `/DATA/AppData/camara/source`, iar API-ul ascultă la `http://192.168.1.134:8088`.
+La actualizare, păstrează cheia existentă și volumele. Fă o copie SQLite înainte de migrarea la API 0.9.9, apoi actualizează întâi serverul și verifică sincronizarea înainte să instalezi Android 1.2.10. Schema 7 se aplică automat. Pentru revenirea integrală la API 0.9.8 este necesară copia făcută înainte de migrare. Păstrează separat baza cu schema 7, care poate conține modificări ulterioare.
+
+Instalarea care a migrat pe ZimaOS la API 0.9.10 folosește un volum nou pentru schema 7 și păstrează volumul anterior. Fișierul `compose.override.yaml` selectează volumul activ. Păstrează acest fișier la actualizările următoare. Volumul cu schema 6 conține numai datele până la migrare.
+
+API 0.9.12 folosește schema 8. În ZimaOS, baza a fost copiată într-un volum separat, cu păstrarea datelor și a identificatorului de sincronizare. Volumele cu schemele 6 și 7 rămân copii anterioare migrărilor. Pentru revenire, salvează întâi datele acceptate de versiunea curentă și ține cont de compatibilitatea schemelor.
+
+Pentru rotația cheii, pune valoarea actuală în `CAMARA_PREVIOUS_API_KEY`, configurează cheia nouă în `CAMARA_API_KEY`, apoi repornește API-ul. Mută fiecare dispozitiv la cheia nouă după ce a terminat sincronizarea. După verificare, elimină cheia anterioară și repornește din nou API-ul.
+
+Pentru fișierele de chei, păstrează un director privat în afara sursei și setează `CAMARA_SECRETS_DIR` în `.env`. Creează câte un fișier pentru `camara_api_key`, `camara_previous_api_key`, `openrouter_api_key` și `groq_api_key`. Lasă goale fișierele pentru opțiunile nefolosite. Containerul rulează cu UID 10001 și trebuie să poată citi fișierele. Folosește permisiuni 0600 și proprietarul 10001 pe ZimaOS. Pornește Compose cu `-f compose.yaml -f compose.secrets.yaml` și include override-ul local existent dacă selectează volumul de date. Variabilele din container indică fișierele montate.
 
 Actualizarea 0.5 folosește schema SQLite 5, cu migrare aditivă pentru loturi gătite și cumpărături confirmate. Ghidul noilor funcții este în `docs/FEATURES-0.5.md`. Copiile mai vechi pot fi restaurate cu noua versiune; noile tabele sunt incluse în backupurile făcute ulterior.
 
@@ -58,13 +66,13 @@ Fișierul Compose folosește `build: ./backend`; trebuie executat din directorul
 
 ## 4. Conectează dispozitivele
 
-În **⋮ → Serverul meu**, introdu `https://camara-m4tteq.duckdns.org` cu aceeași cheie de acces pe ambele dispozitive. Android 0.7 păstrează coșul și jurnalul offline la schimbarea adresei când cheia și identificatorul bazei coincid. Pentru acest domeniu, aplicația poate încerca adresa LAN `192.168.1.134:443` cu același nume și aceeași verificare TLS, dacă routerul nu poate întoarce conexiunea la IP-ul public.
+În **⋮ → Serverul meu**, introdu adresa HTTPS de la Caddy și aceeași cheie de acces pe ambele dispozitive. Android păstrează coșul și jurnalul offline la schimbarea adresei când cheia și identificatorul bazei coincid. Dacă routerul nu poate întoarce conexiunea la IP-ul public, completează explicit câmpul **IP LAN**.
 
-Ruta publică din `/DATA/AppData/ingrijire-personala/Caddyfile` trimite `/health` și `/v1/*` către API-ul Cămara la `192.168.1.134:8088`. Caddy emite și reînnoiește certificatul prin portul public 443, iar serviciul DuckDNS existent actualizează și `camara-m4tteq`. Cheia API este necesară pentru ambele căi. Portul 8088 este pentru rețeaua privată, iar administrarea SSH se poate face prin Tailscale.
+Compose publică implicit portul 8088 doar pe loopback. Dacă proxy-ul Caddy existent contactează API-ul prin IP-ul gazdei, adaugă în `.env` valoarea `CAMARA_BIND_ADDRESS` cu IP-ul privat pe care îl folosește Caddy și restricționează accesul la acel port la nivelul gazdei. Verifică traseul din Caddy înainte să schimbi bind-ul. Publică numai HTTPS pe portul 443 și verifică ruta prin domeniul DuckDNS.
 
 În **Serverul meu → Testează conexiunea**, verifici ruta folosită și versiunea API. Câmpul **IP LAN** poate fi schimbat sau golit. Când este completat, telefonul folosește adresa IP pentru conexiunea locală și verifică certificatul pe numele din adresa HTTPS configurată. Salvează setarea după ce ai verificat ruta.
 
-API 0.7.0 adaugă `GET /v1/status`, care necesită cheia API și afișează starea SQLite, schema și data ultimei copii de siguranță înregistrate. Verificarea Docker folosește `/health` prin loopback și verifică baza, independent de Ollama.
+`GET /v1/status` necesită cheia API și afișează starea SQLite, schema și data ultimei copii de siguranță. Docker folosește `/livez` pe loopback pentru a verifica procesul. Pentru diagnosticarea bazei folosește `/health` sau `/v1/status` cu autentificare. Păstrează un singur worker Uvicorn, deoarece programarea copiilor, sesiunile PDF și limitele de cereri au stare în proces.
 
 ## 5. Model opțional pentru AI pe Android
 

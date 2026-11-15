@@ -7,6 +7,7 @@ import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,7 @@ class BackupManager:
         self.db, self.directory = database, directory
         self.lock = threading.RLock()
         self.last_error = None
+        self.auto_checked_date = None
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
 
@@ -97,12 +99,12 @@ class BackupManager:
             return hashlib.file_digest(source, "sha256").hexdigest()
 
     def create(self, kind="manual"):
-        with self.lock, self.db.lock:
+        with self.lock:
             backup_id = uuid4()
             temporary = self.directory / f"{backup_id}.partial"
             target = self.directory / f"{backup_id}.db"
             try:
-                with self.db.connection() as source, closing(sqlite3.connect(temporary)) as destination:
+                with self.db.readonly_connection() as source, closing(sqlite3.connect(temporary)) as destination:
                     source.backup(destination)
                     if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                         raise ValueError("Copia nu a trecut verificarea SQLite.")
@@ -136,28 +138,61 @@ class BackupManager:
         with self.lock:
             now = now or datetime.now(ZoneInfo("Europe/Bucharest"))
             settings = self.settings()
+            if not settings.enabled or (now.hour, now.minute) < (settings.hour, settings.minute) or self.auto_checked_date == now.date():
+                return None
             done_today = any(info.kind == "auto" and datetime.fromisoformat(info.created_at).astimezone(now.tzinfo).date() == now.date() for info in self.list())
-            if settings.enabled and (now.hour, now.minute) >= (settings.hour, settings.minute) and not done_today:
-                return self.create("auto")
+            result = None if done_today else self.create("auto")
+            self.auto_checked_date = now.date()
+            return result
         return None
 
+    @staticmethod
+    def fingerprint_on(connection):
+        revision = dict(connection.execute("SELECT key,value FROM metadata WHERE key IN ('epoch','snapshot_revision')"))
+        return hashlib.sha256(json.dumps(revision, sort_keys=True).encode()).hexdigest()
+
     def fingerprint(self):
-        with self.db.connection() as connection:
-            records = {table: list(connection.execute(f"SELECT id,data FROM {table} ORDER BY id")) for table in RECORD_MODELS}
-            records["epoch"] = connection.execute("SELECT value FROM metadata WHERE key='epoch'").fetchone()[0]
-        return hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
+        with self.db.readonly_connection() as connection:
+            return self.fingerprint_on(connection)
 
     def preview(self, backup_id):
-        with self.lock, self.db.lock:
+        with self.lock:
             info = self.get(backup_id)
-            with self.db.connection() as connection:
-                current = self.counts(connection)
-            return {"backup": info.model_dump(mode="json"), "current_counts": current, "fingerprint": self.fingerprint()}
+            with self.db.readonly_connection() as connection:
+                connection.execute("BEGIN")
+                return {"backup": info.model_dump(mode="json"), "current_counts": self.counts(connection),
+                        "fingerprint": self.fingerprint_on(connection)}
+
+    def stage_restore(self, path, target):
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as source, \
+                closing(sqlite3.connect(target)) as staged, staged:
+            if source.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or source.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
+                raise ValueError("Copia este deteriorată sau provine dintr-o versiune mai nouă.")
+            available = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"pantry", "shopping", "recipes"}.issubset(available):
+                raise ValueError("Copia nu este o bază Cămara.")
+            for table, model in RECORD_MODELS.items():
+                staged.execute(f"CREATE TABLE {table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+                if table not in available:
+                    continue
+
+                def validated_rows():
+                    for item_id, raw in source.execute(f"SELECT id,data FROM {table} ORDER BY rowid"):
+                        item = model.model_validate_json(raw, extra="ignore")
+                        if str(item.id) != item_id:
+                            raise ValueError("Identificatori nevalizi în copie.")
+                        yield item_id, item.model_dump_json()
+
+                staged.executemany(f"INSERT INTO {table} (id,data) VALUES (?,?)", validated_rows())
+            self.db.validate_products(staged)
+            self.db.validate_receipts(staged)
+            self.db.validate_prepared(staged)
+            self.db.validate_stock_minimums(staged)
 
     def restore(self, backup_id, request: RestoreRequest):
-        with self.lock, self.db.lock:
+        with self.lock, TemporaryDirectory(prefix=".restore-", dir=self.directory) as folder:
             key = f"restore:{request.request_id}"
-            with self.db.connection() as connection:
+            with self.db.readonly_connection() as connection:
                 stored = connection.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
             result_path = self.directory / f"restore-{request.request_id}.json"  # Results from previous releases.
             previous = json.loads(stored[0]) if stored else (
@@ -176,38 +211,27 @@ class BackupManager:
             path = self.directory / f"{info.id}.db"
             if self.digest(path) != info.sha256:
                 raise ValueError("Copia nu a trecut verificarea SHA-256.")
-            rows = {}
-            with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as source:
-                if source.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or source.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
-                    raise ValueError("Copia este deteriorată sau provine dintr-o versiune mai nouă.")
-                available = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                if not {"pantry", "shopping", "recipes"}.issubset(available):
-                    raise ValueError("Copia nu este o bază Cămara.")
-                for table, model in RECORD_MODELS.items():
-                    rows[table] = []
-                    if table in available:
-                        for item_id, raw in source.execute(f"SELECT id,data FROM {table} ORDER BY rowid"):
-                            item = model.model_validate_json(raw)
-                            if str(item.id) != item_id:
-                                raise ValueError("Identificatori nevalizi în copie.")
-                            rows[table].append((item_id, item.model_dump_json()))
-            safety = self.create("pre_restore")
-            epoch = str(uuid4())
-            restored_at = datetime.now(timezone.utc).isoformat()
-            result = {"epoch": epoch, "restored_at": restored_at, "safety_backup_id": str(safety.id)}
-            receipt = {"backup_id": str(backup_id), "request": request_data, "result": result}
-            with self.db.connection() as destination:
-                destination.execute("BEGIN IMMEDIATE")
-                for table, values in rows.items():
-                    destination.execute(f"DELETE FROM {table}")
-                    destination.executemany(f"INSERT INTO {table} (id,data) VALUES (?,?)", values)
-                for table in ("mutations", "pantry_batches", "ai_cache", "recommendations"):
-                    destination.execute(f"DELETE FROM {table}")
-                self.db.validate_products(destination)
-                self.db.validate_receipts(destination)
-                self.db.validate_prepared(destination)
-                self.db.validate_stock_minimums(destination)
-                destination.execute("UPDATE metadata SET value=? WHERE key='epoch'", (epoch,))
-                destination.execute("INSERT INTO metadata VALUES ('restored_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (restored_at,))
-                destination.execute("INSERT INTO metadata VALUES (?,?)", (key, json.dumps(receipt)))
-            return result
+            target = Path(folder) / "staged.db"
+            self.stage_restore(path, target)
+
+            # No application write can overtake the safety copy and the final transaction.
+            with self.db.lock:
+                if self.fingerprint() != request.expected_fingerprint:
+                    raise BatchConflict("Datele s-au schimbat în timpul validării copiei. Reia previzualizarea.")
+                safety = self.create("pre_restore")
+                epoch = str(uuid4())
+                restored_at = datetime.now(timezone.utc).isoformat()
+                result = {"epoch": epoch, "restored_at": restored_at, "safety_backup_id": str(safety.id)}
+                receipt = {"backup_id": str(backup_id), "request": request_data, "result": result}
+                with self.db.connection() as destination:
+                    destination.execute("ATTACH DATABASE ? AS staged", (str(target),))
+                    destination.execute("BEGIN IMMEDIATE")
+                    for table in RECORD_MODELS:
+                        destination.execute(f"DELETE FROM {table}")
+                        destination.execute(f"INSERT INTO {table} (id,data) SELECT id,data FROM staged.{table} ORDER BY rowid")
+                    for table in ("mutations", "pantry_batches", "ai_cache", "recommendations"):
+                        destination.execute(f"DELETE FROM {table}")
+                    destination.execute("UPDATE metadata SET value=? WHERE key='epoch'", (epoch,))
+                    destination.execute("INSERT INTO metadata (key,value) VALUES ('restored_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (restored_at,))
+                    destination.execute("INSERT INTO metadata (key,value) VALUES (?,?)", (key, json.dumps(receipt)))
+                return result

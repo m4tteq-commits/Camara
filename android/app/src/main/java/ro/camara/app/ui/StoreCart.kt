@@ -35,12 +35,12 @@ fun InStoreScreen(cart: ShoppingCart?, snapshot: Snapshot, enabled: Boolean, onC
     val preferences = remember(context) { context.getSharedPreferences("aisle_order", android.content.Context.MODE_PRIVATE) }
     val merchant = RecipeMath.normalize(cart.merchant).ifBlank { "magazin" }
     var aisleOrder by remember(merchant) { mutableStateOf(ShoppingAisle.ordered(preferences.getString(merchant, null))) }
-    val selected = cart.rows.filter { it.selected }
-    val byAisle = selected.groupBy { ShoppingAisle.forProduct(it.name, it.aisle) }
-    val groups = aisleOrder.mapNotNull { aisle -> byAisle[aisle]?.let { aisle.label to it } }
+    val selected = remember(cart.rows) { cart.rows.filter { it.selected } }
+    val byAisle = remember(selected) { selected.groupBy { ShoppingAisle.forProduct(it.name, it.aisle) } }
+    val groups = remember(byAisle, aisleOrder) { aisleOrder.mapNotNull { aisle -> byAisle[aisle]?.let { aisle.label to it } } }
     val omitted = cart.rows.filterNot { it.selected }
     val unknown = selected.count { CheckoutRules.cents(it.price) == null }
-    val total = selected.sumOf { CheckoutRules.cents(it.price)?.toLong() ?: 0 }
+    val total = remember(selected) { selected.sumOf { CheckoutRules.cents(it.price)?.toLong() ?: 0 } }
     Column(modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item { PageHeader("Coșul tău", "Verifică ce iei cu tine acasă.") {

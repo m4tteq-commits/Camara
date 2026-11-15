@@ -20,7 +20,13 @@ import java.time.LocalDate
 import java.math.BigDecimal
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import ro.camara.app.data.*
+
+private val pantryDate = DateTimeFormatter.ofPattern("d MMM", Locale.forLanguageTag("ro-RO"))
+private data class PantrySearchRow(val item: PantryItem, val normalized: String)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -43,11 +49,22 @@ fun PantryScreen(items: List<PantryItem>, onEdit: (PantryItem) -> Unit, onDelete
     val today = LocalDate.now()
     val cutoff = today.plusDays(3).toString()
     val soon = remember(items, cutoff) { items.count { it.expires_on != null && it.expires_on <= cutoff } }
-    val filtered = remember(items, query, location, cutoff) {
-        val needle = RecipeMath.normalize(query)
-        items.filter { RecipeMath.normalize(it.name).contains(needle) &&
-            (location == "all" || location == it.location || (location == "due" && it.expires_on != null && it.expires_on <= cutoff)) }
-            .sortedWith(compareBy<PantryItem> { it.expires_on ?: "9999" }.thenBy { RecipeMath.normalize(it.name) })
+    val rows by produceState(emptyList(), items) {
+        value = withContext(Dispatchers.Default) {
+            items.map { PantrySearchRow(it, RecipeMath.normalize(it.name)) }
+                .sortedWith(compareBy<PantrySearchRow> { it.item.expires_on ?: "9999" }.thenBy { it.normalized })
+        }
+    }
+    val search by produceState(query, query) {
+        if (query.isNotBlank()) delay(180)
+        value = query
+    }
+    val filtered = remember(rows, search, location, cutoff) {
+        val needle = RecipeMath.normalize(search)
+        rows.asSequence().filter { (item, normalized) ->
+            normalized.contains(needle) && (location == "all" || location == item.location ||
+                (location == "due" && item.expires_on != null && item.expires_on <= cutoff))
+        }.map(PantrySearchRow::item).toList()
     }
     val selectedItem = filtered.firstOrNull { it.id == selectedId }
     ListDetailLayout(modifier, wide, list = { listModifier ->
@@ -197,5 +214,5 @@ internal fun QuickUseDialog(item: PantryItem, enabled: Boolean, onDismiss: () ->
 internal fun storageName(value: String) = when (value) { "congelator" -> "Congelator"; "camara" -> "Cămară"; else -> "Frigider" }
 internal fun expiryText(value: String?, today: LocalDate = LocalDate.now()): String {
     val date = value?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return "Fără termen introdus"
-    return when { date < today -> "Termen depășit · ${date.format(DateTimeFormatter.ofPattern("d MMM", Locale.forLanguageTag("ro-RO")))}"; date == today -> "Termen astăzi"; date == today.plusDays(1) -> "Termen mâine"; else -> "Termen ${date.format(DateTimeFormatter.ofPattern("d MMM", Locale.forLanguageTag("ro-RO")))}" }
+    return when { date < today -> "Termen depășit · ${date.format(pantryDate)}"; date == today -> "Termen astăzi"; date == today.plusDays(1) -> "Termen mâine"; else -> "Termen ${date.format(pantryDate)}" }
 }

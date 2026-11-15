@@ -17,14 +17,15 @@ object SyncEngine {
         val offline = OfflineStore(context)
         val current = connections.read()
         val previous = current?.let(offline::read)
-        val snapshot = CamaraApi(candidate).snapshot()
+        val response = CamaraApi(candidate).snapshotReply()
+        val snapshot = checkNotNull(response.snapshot)
         val sameConnection = current != null && current.token == candidate.token && current.baseUrl == candidate.baseUrl
         val sameDatabase = current?.token == candidate.token && snapshot.epoch.isNotBlank() && previous?.server?.epoch == snapshot.epoch
         require(previous?.pending.isNullOrEmpty() || sameConnection || sameDatabase) {
             "Sincronizează sau rezolvă acțiunile în așteptare înainte de a schimba serverul ori cheia."
         }
         val config = if (current != null && (sameConnection || sameDatabase)) candidate.copy(storageUrl = current.storageUrl) else candidate
-        val local = offline.server(config, snapshot)
+        val local = offline.server(config, snapshot, response.etag)
         connections.save(config)
         config to local
     }
@@ -35,7 +36,8 @@ object SyncEngine {
         val api = CamaraApi(config)
         api.restore(id, request)
         completed = null
-        store.server(config, api.snapshot())
+        val response = api.snapshotReply()
+        store.server(config, checkNotNull(response.snapshot), response.etag)
     }
 
     suspend fun resolve(context: Context, config: ConnectionConfig, id: String, keepMine: Boolean): LocalState = mutex.withLock {
@@ -60,7 +62,7 @@ object SyncEngine {
         val network = CamaraApi.routeGeneration
         val recent = completed
         if (reuseRecent && recent?.config == config && recent.network == network &&
-            SystemClock.elapsedRealtime() - recent.time < 2_000) {
+            SystemClock.elapsedRealtime() - recent.time < 10_000) {
             val local = store.read(config)
             if (local.pending.isEmpty()) return local
         }
@@ -70,31 +72,27 @@ object SyncEngine {
 
     private suspend fun synchronize(store: OfflineStore, config: ConnectionConfig): LocalState {
         val api = CamaraApi(config, fast = true)
-        var local = store.server(config, api.snapshot())
-        var needsRefresh = false
+        var local = store.read(config)
+        val base = local
         while (true) {
             val action = local.pending.firstOrNull() ?: break
             if (action.issue != null) break
             if (staleEpoch(action, local.server)) {
                 return store.issue(config, action.id, "Serverul a fost restaurat. Verifică schimbările vechi.")
             }
-            val result = try { api.applyAction(action.id, action.mutation) }
+            try { api.applyAction(action.id, action.mutation) }
             catch (e: ApiException) {
                 if (e.code == 409 || e.code == 422) {
                     return store.issue(config, action.id, e.message ?: "Verifică acțiunea înainte de sincronizare.", api.snapshot())
                 }
                 throw e
             }
-            if (result.replayed) {
-                // The confirmed write might have been followed by another device's edit.
-                local = store.acknowledge(config, action.id, api.snapshot())
-                needsRefresh = false
-            } else {
-                local = store.acknowledge(config, action.id)
-                needsRefresh = true
-            }
+            // CAS and epoch checks on the server protect all queued writes, including retries.
+            // Fetch authoritative data once after the whole queue (also for replayed actions).
+            local = store.acknowledge(config, action.id)
         }
-        return if (needsRefresh) store.server(config, api.snapshot()) else store.read(config)
+        val response = api.snapshotReply(base.etag, base.server.takeIf { it.epoch.isNotBlank() })
+        return store.server(config, response.snapshot ?: base.server, response.etag)
     }
     fun schedule(context: Context, now: Boolean = false) {
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -102,7 +100,8 @@ object SyncEngine {
         manager.enqueueUniquePeriodicWork("camara-sync-periodic", ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints).build())
         if (now) manager.enqueueUniqueWork("camara-sync-now", ExistingWorkPolicy.APPEND_OR_REPLACE,
-            OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+            OneTimeWorkRequestBuilder<SyncWorker>().setInitialDelay(3, TimeUnit.SECONDS).setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
     }
 }
 

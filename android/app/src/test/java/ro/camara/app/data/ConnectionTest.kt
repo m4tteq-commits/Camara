@@ -12,9 +12,9 @@ import org.junit.Test
 class ConnectionTest {
     private val key = "test-" + "a".repeat(40)
 
-    @Test fun legacyLanAddressCanBeClearedOrChangedWithoutChangingStorageIdentity() {
+    @Test fun lanAddressMustBeExplicitAndCanChangeWithoutChangingStorageIdentity() {
         val current = ConnectionConfig("https://camara-m4tteq.duckdns.org/", key).validated()
-        assertEquals("192.168.1.134", current.lanAddress)
+        assertNull(current.lanAddress)
         assertEquals("fd00::1234", current.copy(lanAddress = "[fd00::1234]").validated().lanAddress)
         assertNull(current.copy(lanAddress = null).validated().lanAddress)
         assertEquals(current.storageIdentity, current.copy(lanAddress = "192.168.1.5").validated().storageIdentity)
@@ -24,7 +24,9 @@ class ConnectionTest {
         assertThrows(IllegalArgumentException::class.java) {
             ConnectionConfig("http://192.168.1.5", key, lanAddress = "192.168.1.5").validated()
         }
-        assertEquals("http://192.168.1.5:8088", ConnectionConfig("http://192.168.1.5:8088", key).validated().baseUrl)
+        val local = ConnectionConfig("http://192.168.1.5:8088", key)
+        assertThrows(IllegalArgumentException::class.java) { local.validated(allowHttp = false) }
+        assertEquals("http://192.168.1.5:8088", local.validated(allowHttp = true).baseUrl)
     }
 
     @Test fun losingTheResponseDoesNotReplayWritesOnTheOtherRoute() {
@@ -58,7 +60,7 @@ class ConnectionTest {
             }
         }
         try {
-            val config = ConnectionConfig("http://127.0.0.1:${server.localPort}", key).validated()
+            val config = ConnectionConfig("http://127.0.0.1:${server.localPort}", key).validated(allowHttp = true)
             repeat(2) { assertEquals("0.6.1", CamaraApi(config).testConnection().status.version) }
             val result = runCatching { CamaraApi(config.copy(token = "x".repeat(40))).testConnection() }
             assertEquals(401, (result.exceptionOrNull() as ApiException).code)
@@ -102,7 +104,7 @@ class ConnectionTest {
         try {
             CamaraApi.networkChanged(101L)
             val wifi = CamaraApi.routeGeneration
-            val config = ConnectionConfig("http://127.0.0.1:${server.localPort}", key).validated()
+            val config = ConnectionConfig("http://127.0.0.1:${server.localPort}", key).validated(allowHttp = true)
             val action = ActionRules.action("Salt", listOf(Change("pantry", "salt", after = ActionRules.record(PantryItem("salt", "Salt", 1.0)))))
             assertTrue(runCatching { CamaraApi(config).applyAction(action.id, action.mutation) }.exceptionOrNull() is IOException)
             CamaraApi.networkChanged(null)

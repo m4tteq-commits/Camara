@@ -161,3 +161,37 @@ def test_checkout_total_validation_and_authenticated_preview(tmp_path):
         assert client.post('/v1/plans/preview', json=body).status_code == 401
         result = client.post('/v1/plans/preview', json=body, headers={'Authorization': 'Bearer ' + key})
         assert result.status_code == 200 and result.json()['action'] is None
+def test_plan_calls_ai_only_for_a_real_tie(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+    from app.catalog import CATALOG, prepare, recipe_day
+    from app.main import create_app
+    from app.models import RecipeRequest
+    from test_api import HEADERS, KEY
+
+    entry = next(row for row in CATALOG if row.id == "omleta")
+    other = next(row for row in CATALOG if row.id == "paste-rosii")
+    entries = [entry]
+    monkeypatch.setattr("app.weekly.options", lambda *_: [(row, prepare(row, RecipeRequest(), [])) for row in entries])
+
+    class Choice:
+        calls = []
+
+        async def plan_choice(self, choices, preferences):
+            self.calls.append(choices)
+            return other.id
+
+    ai = Choice()
+    with TestClient(create_app(tmp_path / "plan-tie.db", KEY, ai), headers=HEADERS) as client:
+        data = {"id": str(uuid4()), "start": recipe_day().isoformat(), "days": 1,
+                "budget_cents": 50000, "use_ai": True,
+                "prices": [{"name": name, "quantity": amount, "unit": unit, "cents": 100}
+                           for name, amount, unit in (*entry.parts, *other.parts) if name != "Apă"]}
+        result = client.post("/v1/plans/preview", json=data).raise_for_status().json()
+        assert not result["ai_used"] and not ai.calls
+        entries.append(other)
+        result = client.post("/v1/plans/preview", json=data).raise_for_status().json()
+        assert result["ai_used"] and result["seed"] == other.id
+        assert result["meals"][0]["recipe"]["title"] == other.title
+        assert {row["id"] for row in ai.calls[0]} == {entry.id, other.id}

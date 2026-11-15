@@ -12,14 +12,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import ro.camara.app.notifications.ReminderScheduler
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
@@ -39,11 +31,9 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -68,33 +58,6 @@ import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
-private enum class Destination(val label: String, val icon: ImageVector) {
-    Pantry("Cămara", Icons.Outlined.Kitchen),
-    Recipes("Gătește", Icons.Outlined.RestaurantMenu),
-    Shopping("Cumpărături", Icons.Outlined.ShoppingBasket),
-    Plan("Plan", Icons.Outlined.CalendarMonth),
-    Budget("Buget", Icons.Outlined.AccountBalanceWallet),
-    Today("Astăzi", Icons.Outlined.Today),
-    More("Mai multe", Icons.Outlined.MoreHoriz),
-    Products("Catalog", Icons.Outlined.Inventory2),
-    Receipts("Bonuri", Icons.Outlined.ReceiptLong),
-    Backups("Backup", Icons.Outlined.Backup),
-    InStore("În magazin", Icons.Outlined.ShoppingCart),
-    Prepared("Porții gătite", Icons.Outlined.TakeoutDining),
-    Automatic("Plan automat", Icons.Outlined.AutoAwesome),
-    Minimums("Reaprovizionare", Icons.Outlined.Inventory2),
-    UseSoon("Rețete din cămară", Icons.Outlined.RestaurantMenu),
-    Prices("Prețuri", Icons.Outlined.ShowChart),
-}
-private val primaryDestinations = listOf(5, 0, 1, 2, 6)
-private fun navLabel(index: Int) = when (index) { 0 -> "Cămară"; 2 -> "Listă"; 6 -> "Mai mult"; else -> Destination.entries[index].label }
-private fun navSelected(current: Int, item: Int) = current == item || (item == 2 && current in listOf(10, 15)) ||
-    (item == 0 && current == 13) || (item == 1 && current == 14) || (item == 6 && current in listOf(3, 4, 7, 8, 9, 11, 12))
-
-private data class AppPage(val destination: Int, val recipeId: String?) {
-    val saveKey: String get() = if (recipeId == null) "screen:$destination" else "recipe:$recipeId"
-}
-
 private val PreviewRecipeSaver = Saver<Recipe?, String>(
     save = { recipe -> recipe?.let { ActionRules.json.encodeToString(Recipe.serializer(), it) } },
     restore = { ActionRules.json.decodeFromString(Recipe.serializer(), it) },
@@ -108,9 +71,12 @@ private val PersonalRecipeSaver = Saver<PersonalRecipe?, String>(
 @Composable
 fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: String? = null, onShareHandled: () -> Unit = {},
     onAppearanceChange: (CamaraAppearance) -> Unit) {
-    val state = model.state
-    var selected by rememberSaveable { mutableIntStateOf(5) }
-    val screenStates = rememberSaveableStateHolder()
+    val state by remember(model) {
+        derivedStateOf(structuralEqualityPolicy()) { model.state.copy(message = null, syncing = false, lastSync = null) }
+    }
+    val connection = remember(model) { derivedStateOf(structuralEqualityPolicy()) { model.state.connectionDisplay() } }
+    val recipeLibrary = rememberRecipeLibrary(state.snapshot)
+    var selected by rememberSaveable { mutableStateOf(Destination.Today) }
     var settings by rememberSaveable { mutableStateOf(false) }
     var appearanceOpen by rememberSaveable { mutableStateOf(false) }
     var remindersDialog by rememberSaveable { mutableStateOf(false) }
@@ -135,18 +101,17 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     var selectedRecipe by rememberSaveable { mutableStateOf<String?>(null) }
     var previewRecipe by rememberSaveable(stateSaver = PreviewRecipeSaver) { mutableStateOf<Recipe?>(null) }
     var cookingGuide by rememberSaveable { mutableStateOf(false) }
-    var recipeReturn by rememberSaveable { mutableIntStateOf(1) }
-    var navigationHistory by rememberSaveable { mutableStateOf(listOf<Int>()) }
-    var appMenu by remember { mutableStateOf(false) }
-    fun navigate(index: Int, clearHistory: Boolean = false) {
-        if (index != selected) navigationHistory = if (index in primaryDestinations || clearHistory) emptyList() else (navigationHistory + selected).takeLast(12)
-        selected = index; selectedRecipe = null; cookingGuide = false
+    var recipeReturn by rememberSaveable { mutableStateOf(Destination.Recipes) }
+    var navigationHistory by rememberSaveable { mutableStateOf(emptyList<Destination>()) }
+    fun navigate(destination: Destination, clearHistory: Boolean = false) {
+        if (destination != selected) navigationHistory = if (destination in primaryDestinations || clearHistory) emptyList() else (navigationHistory + selected).takeLast(12)
+        selected = destination; selectedRecipe = null; cookingGuide = false
     }
     fun openRecipe(recipe: Recipe) {
         previewRecipe = null
         recipeReturn = selected
         selectedRecipe = recipe.id
-        selected = 1
+        selected = Destination.Recipes
         cookingGuide = false
     }
     fun openRecipePreview(recipe: Recipe) {
@@ -157,9 +122,9 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
         if (cookingGuide) cookingGuide = false
         else if (selectedRecipe != null) { selectedRecipe = null; selected = recipeReturn }
         else if (navigationHistory.isNotEmpty()) { selected = navigationHistory.last(); navigationHistory = navigationHistory.dropLast(1) }
-        else selected = when (selected) { 10, 15 -> 2; 12 -> 3; 13 -> 0; 3, 4, 7, 8, 9, 11 -> 6; else -> 5 }
+        else selected = selected.backFromRoot
     }
-    BackHandler(enabled = selected != 5 || selectedRecipe != null) { goBack() }
+    BackHandler(enabled = selected != Destination.Today || selectedRecipe != null) { goBack() }
     var syncDialog by remember { mutableStateOf(false) }
     var cookingRecipe by remember { mutableStateOf<Recipe?>(null) }
     var cookingServings by remember { mutableIntStateOf(1) }
@@ -206,7 +171,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     var cameraAction by rememberSaveable { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
     val canWrite = !state.busy && !state.generating
-    LaunchedEffect(selected) { if (selected == 10 && model.state.cart == null) model.startCart() }
+    LaunchedEffect(selected) { if (selected == Destination.InStore && model.state.cart == null) model.startCart() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     fun showImportedText(text: String) {
@@ -217,7 +182,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     }
     LaunchedEffect(sharedLink, state.config) {
         if (sharedLink != null && state.config != null) {
-            navigate(1)
+            navigate(Destination.Recipes)
             sourceLink = sharedLink
             recipePhotoError = null
             importSources = true
@@ -279,7 +244,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera(action)
         else cameraPermission.launch(Manifest.permission.CAMERA)
     }
-    LaunchedEffect(selected) { if (selected == 9) model.loadBackups() }
+    LaunchedEffect(selected) { if (selected == Destination.Backups) model.loadBackups() }
     var notificationAllowed by remember { mutableStateOf(ReminderScheduler.allowed(context)) }
     var pendingTest by remember { mutableStateOf(false) }
     fun testNotification() { ReminderScheduler.post(context, "Cămara · notificare de test", "Notificările Cămara funcționează. Ora rezumatului se schimbă din clopoțel.", test = true) }
@@ -294,12 +259,14 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { notificationAllowed = ReminderScheduler.allowed(context) }
 
-    LaunchedEffect(state.message) {
-        state.message?.let { snackbar.showSnackbar(it); model.clearMessage() }
-    }
+    ShowAppMessage(model, snackbar)
 
     if (appearanceOpen) AppearanceSheet(appearance, onAppearanceChange) { appearanceOpen = false }
 
+    if (state.initializing) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
+    }
     if (state.config == null) {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = {
             TopAppBar(title = { Text("Cămara") }, actions = {
@@ -311,191 +278,108 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
         return
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val wide = maxWidth >= 840.dp
-        val shortWindow = maxHeight < 520.dp
-        val recipeInPane = wide && selected == 1 && recipeReturn == 1 && !cookingGuide
-        val motion = LocalCamaraMotion.current
-        Scaffold(
-            snackbarHost = { SnackbarHost(snackbar) },
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (selected in primaryDestinations && selectedRecipe == null) {
-                                Surface(shape = RoundedCornerShape(11.dp), color = MaterialTheme.colorScheme.primaryContainer) { Icon(Icons.Outlined.Eco, null, Modifier.padding(8.dp).size(20.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-                            }
-                            val title = if (cookingGuide) "Mod de gătit" else if (selectedRecipe != null && !recipeInPane) "Rețetă"
-                                else if (selected in primaryDestinations) "Cămara" else Destination.entries[selected].label
-                            Text(title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            ConnectionPill(state) { syncDialog = true }
-                        }
-                    },
-                    navigationIcon = { if (selected !in primaryDestinations || selectedRecipe != null) IconButton(onClick = ::goBack) { Icon(Icons.Outlined.ArrowBack, "Înapoi") } },
-                    actions = {
-                        IconButton(onClick = { remindersDialog = true }) { Icon(Icons.Outlined.NotificationsNone, "Notificări pentru termene") }
-                        Box {
-                            IconButton(onClick = { appMenu = true }) { Icon(Icons.Outlined.MoreVert, "Opțiunile aplicației") }
-                            DropdownMenu(appMenu, { appMenu = false }) {
-                                DropdownMenuItem(text = { Text("Actualizează datele") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, enabled = !state.busy && !state.generating, onClick = { appMenu = false; model.refresh() })
-                                DropdownMenuItem(text = { Text("Teme și aspect") }, leadingIcon = { Icon(Icons.Outlined.Palette, null) },
-                                    onClick = { appMenu = false; appearanceOpen = true })
-                                DropdownMenuItem(text = { Text("Serverul meu") }, leadingIcon = { Icon(Icons.Outlined.Dns, null) }, enabled = !state.busy && !state.generating && !state.syncing, onClick = { appMenu = false; settings = true })
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-                )
-            },
-            bottomBar = {
-                if (!wide) Column {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = .06f))
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest, tonalElevation = 0.dp) {
-                        primaryDestinations.forEach { index ->
-                            val item = Destination.entries[index]
-                            NavigationBarItem(selected = navSelected(selected, index), onClick = { navigate(index) },
-                                icon = { Icon(item.icon, null, Modifier.size(24.dp)) }, label = { Text(navLabel(index), style = MaterialTheme.typography.labelSmall, maxLines = 1) })
-                        }
+    AppShell(selected, selectedRecipe, selected == Destination.Recipes && recipeReturn == Destination.Recipes,
+        cookingGuide, state.busy, canWrite, connection, snackbar,
+        navigate = { navigate(it) }, goBack = ::goBack, onSync = { syncDialog = true }, onRefresh = { model.refresh() },
+        onReminders = { remindersDialog = true }, onAppearance = { appearanceOpen = true }, onSettings = { settings = true },
+        onAdd = {
+            if (selected == Destination.Pantry) addPantry()
+            else { shoppingDraftId = UUID.randomUUID().toString(); shoppingDialog = true }
+        }
+    ) { page, wide, recipeInPane ->
+        val body = Modifier.fillMaxSize()
+        when (page.destination) {
+            Destination.Pantry -> PantryScreen(state.snapshot.pantry,
+                onEdit = { if (canWrite) { editing = it; pantryDialog = true } },
+                onDelete = { deleting = it }, onBulk = { model.clearMessage(); bulkBatchId = UUID.randomUUID().toString(); bulkDialog = true }, canWrite = canWrite, bulkAvailable = state.online, onWaste = { wasteItem = it },
+                modifier = body, onOpenMinimums = { navigate(Destination.Minimums) }, onUse = { quickUseItem = it },
+                stockTools = state.snapshot.stock_tools, onScanBatch = { requestCamera("batch") },
+                reviewTerms = reviewPantryTerms, onTermsOpened = { reviewPantryTerms = false }, wide = wide,
+                onQuickAdd = ::addPantry)
+            Destination.Recipes -> {
+                val recipeId = page.recipeId ?: selectedRecipe.takeIf { recipeInPane }
+                val recipe = previewRecipe?.takeIf { it.id == recipeId }
+                    ?: recipeLibrary.firstOrNull { it.id == recipeId }
+                val details: @Composable (Recipe, Modifier) -> Unit = { value, pane ->
+                    key(value.id) {
+                        val personal = state.snapshot.personal_recipes.firstOrNull { it.id == value.id }
+                        val cloudApi = state.config?.takeIf { state.online &&
+                            state.cloudProviders.isNotEmpty() }?.let { CamaraApi(it) }
+                        val personalApi = cloudApi?.takeIf { state.pending.isEmpty() && personal != null }
+                        RecipeDetails(value, canWrite, { cookingGuide = true }, { model.addMissing(value); navigate(Destination.Shopping) }, pane,
+                            onCook = { cookingPlan = null; cookingKeepBatch = false; cookingRecipe = value; cookingServings = value.servings },
+                            onPlan = { initialPlanBatch = null; editingPlan = null; planRecipe = value; planDate = LocalDate.now(); planDialog = true },
+                            onAdvice = personalApi?.let { api -> { goal -> api.recipeAdvice(value.id, goal) } },
+                            onConversation = if (personal != null) personalApi?.let { api -> { input -> api.recipeConversation(value.id, input) } }
+                                else cloudApi?.let { api -> { input -> api.catalogConversation(value, input) } },
+                            onVariant = { draft ->
+                                variantId = UUID.randomUUID().toString()
+                                variantJson = ActionRules.json.encodeToString(AiImportedRecipe.serializer(), draft)
+                            },
+                            onNotes = personal?.let { item -> {
+                                editingPersonal = item
+                                personalNotesOnly = true
+                                personalDialog = true
+                            } })
                     }
                 }
-            },
-            floatingActionButton = {
-                if (selected in listOf(0, 2) && canWrite) ExtendedFloatingActionButton(
-                    onClick = {
-                        if (selected == 0) addPantry()
-                        else { shoppingDraftId = UUID.randomUUID().toString(); shoppingDialog = true }
-                    },
-                    icon = { Icon(Icons.Outlined.Add, null) }, text = { Text(if (selected == 0) "Adaugă aliment" else "Adaugă produs") },
-                )
-            },
-        ) { padding ->
-            Row(Modifier.padding(padding).fillMaxSize()) {
-                if (wide) NavigationRail(
-                    Modifier.fillMaxHeight(), containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                    windowInsets = WindowInsets(0, 0, 0, 0),
-                ) {
-                    Column(
-                        Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(if (shortWindow) 4.dp else 16.dp),
-                    ) {
-                        if (!shortWindow) Spacer(Modifier.height(16.dp))
-                        primaryDestinations.forEach { index ->
-                            val item = Destination.entries[index]
-                            NavigationRailItem(selected = navSelected(selected, index), onClick = { navigate(index) },
-                                icon = { Icon(item.icon, null) }, label = { Text(navLabel(index)) })
-                        }
-                    }
-                }
-                Column(Modifier.weight(1f).fillMaxHeight()) {
-                    if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    AnimatedContent(
-                        targetState = AppPage(selected, if (recipeInPane) null else selectedRecipe),
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        transitionSpec = {
-                            if (motion) {
-                                (fadeIn(tween(180, delayMillis = 30)) + slideInVertically(tween(210)) { it / 40 }) togetherWith fadeOut(tween(100))
-                            } else EnterTransition.None togetherWith ExitTransition.None
-                        },
-                        label = "Navigare Camara",
-                    ) { page ->
-                        screenStates.SaveableStateProvider(page.saveKey) {
-                            val body = Modifier.fillMaxSize()
-                            when (page.destination) {
-                                0 -> PantryScreen(state.snapshot.pantry,
-                                    onEdit = { if (canWrite) { editing = it; pantryDialog = true } },
-                                    onDelete = { deleting = it }, onBulk = { model.clearMessage(); bulkBatchId = UUID.randomUUID().toString(); bulkDialog = true }, canWrite = canWrite, bulkAvailable = state.online, onWaste = { wasteItem = it },
-                                    modifier = body, onOpenMinimums = { navigate(13) }, onUse = { quickUseItem = it },
-                                    stockTools = state.snapshot.stock_tools, onScanBatch = { requestCamera("batch") },
-                                    reviewTerms = reviewPantryTerms, onTermsOpened = { reviewPantryTerms = false }, wide = wide,
-                                    onQuickAdd = ::addPantry)
-                                1 -> {
-                                    val recipeId = page.recipeId ?: selectedRecipe.takeIf { recipeInPane }
-                                    val recipe = previewRecipe?.takeIf { it.id == recipeId }
-                                        ?: state.snapshot.allRecipes().firstOrNull { it.id == recipeId }
-                                    val details: @Composable (Recipe, Modifier) -> Unit = { value, pane ->
-                                        key(value.id) {
-                                            val personal = state.snapshot.personal_recipes.firstOrNull { it.id == value.id }
-                                            val cloudApi = state.config?.takeIf { state.online && state.pending.isEmpty() &&
-                                                state.cloudProviders.isNotEmpty() && personal != null }?.let { CamaraApi(it) }
-                                            RecipeDetails(value, canWrite, { cookingGuide = true }, { model.addMissing(value); navigate(2) }, pane,
-                                                onCook = { cookingPlan = null; cookingKeepBatch = false; cookingRecipe = value; cookingServings = value.servings },
-                                                onPlan = { initialPlanBatch = null; editingPlan = null; planRecipe = value; planDate = LocalDate.now(); planDialog = true },
-                                                onAdvice = cloudApi?.let { api -> { goal -> api.recipeAdvice(value.id, goal) } },
-                                                onConversation = cloudApi?.let { api -> { input -> api.recipeConversation(value.id, input) } },
-                                                onVariant = { draft ->
-                                                    variantId = UUID.randomUUID().toString()
-                                                    variantJson = ActionRules.json.encodeToString(AiImportedRecipe.serializer(), draft)
-                                                },
-                                                onNotes = personal?.let { item -> {
-                                                    editingPersonal = item
-                                                    personalNotesOnly = true
-                                                    personalDialog = true
-                                                } })
-                                        }
-                                    }
-                                    if (page.recipeId == null) {
-                                        ListDetailLayout(body, wide, list = { pane ->
-                                            RecipesScreen(state, canWrite, model::generate, ::openRecipe, pane, model::setAiMode, model::downloadLocalModel,
-                                                onPersonal = { editingPersonal = it; personalNotesOnly = false; personalDialog = true },
-                                                onDeletePersonal = { deletingPersonal = it },
-                                                onSuggest = model::suggestRecipes, onPreview = ::openRecipePreview,
-                                                onImport = { showImportedText("") }, selectedRecipeId = recipeId, onTabChange = { selectedRecipe = null },
-                                                onPdfImport = if (state.online && state.cloudProviders.isNotEmpty()) {
-                                                    { model.clearMessage(); importPdf = true }
-                                                } else null,
-                                                onSources = { sourceLink = ""; recipePhotoError = null; importSources = true },
-                                                onFavorite = { model.savePersonal(it.copy(favorite = !it.favorite)) {} })
-                                        }, detail = { pane ->
-                                            if (recipe != null) details(recipe, pane)
-                                            else DetailPlaceholder(pane, Icons.Outlined.RestaurantMenu, "Detalii rețetă", "Alege o rețetă din listă.")
-                                        })
-                                    } else if (recipe == null) {
-                                        DetailPlaceholder(body, Icons.Outlined.RestaurantMenu, "Rețetă indisponibilă", "Revino la lista de rețete.")
-                                    } else if (cookingGuide && page.recipeId == selectedRecipe) CookingMode(recipe, body) { cookingGuide = false }
-                                    else details(recipe, body)
-                                }
-                                2 -> ShoppingScreen(state.snapshot, canWrite,
-                                    onCheck = { model.saveShopping(it.copy(checked = !it.checked)) },
-                                    onDelete = { model.deleteShopping(it.id) }, modifier = body, onStore = { navigate(10) },
-                                    onRepeat = model::repeatPurchase, onPrices = { navigate(15) }, onAisleChange = model::saveShopping)
-                                3 -> PlanScreen(state.snapshot, canWrite,
-                                    onAdd = { initialPlanBatch = null; planDate = it; planRecipe = null; editingPlan = null; planDialog = true },
-                                    onEdit = { initialPlanBatch = null; editingPlan = it; planRecipe = it.recipe; planDate = LocalDate.parse(it.on_date); planDialog = true },
-                                    onDelete = { deletingPlan = it }, onCook = { if (it.prepared_batch_id != null) servePlan = it else { cookingKeepBatch = false; cookingPlan = it.id; cookingRecipe = it.recipe; cookingServings = it.servings } },
-                                    onShopping = { shoppingPreview = RecipeMath.shopping(state.snapshot, it) }, modifier = body, onAutomatic = { navigate(12) }, onPrepared = { navigate(11) }, onRecipe = ::openRecipe,
-                                    focusDate = focusMealDate, onDateOpened = { focusMealDate = null })
-                                4 -> BudgetScreen(state.snapshot, canWrite,
-                                    onExpense = { editingExpense = it; expenseDialog = true }, onDelete = { deletingExpense = it },
-                                    onBudget = { budgetMonth = it }, onUndo = { undoEvent = it }, modifier = body)
-                                5 -> TodayScreen(state, { navigate(it) }, { if (canWrite) requestCamera("batch") }, { navigate(8) }, body,
-                                    onAdd = { addPantry() },
-                                    onReviewTerms = { reviewPantryTerms = true; navigate(0) },
-                                    onOpenMeal = { date -> focusMealDate = date; navigate(3) })
-                                6 -> MoreScreen({ navigate(it) }, body, appearance,
-                                    onAppearance = { appearanceOpen = true }, onReminders = { remindersDialog = true },
-                                    onServer = { settings = true }, serverEnabled = canWrite && !state.syncing, storeEnabled = canWrite)
-                                7 -> ProductsScreen(state.snapshot.products, canWrite,
-                                    onAdd = { editingProduct = null; productCode = ""; addAfterProduct = false; productDialog = true }, onScan = { requestCamera("barcode") },
-                                    onEdit = { editingProduct = it; productCode = it.barcode; addAfterProduct = false; productDialog = true }, onStock = { stockProduct = it }, onDelete = { deletingProduct = it }, modifier = body)
-                                8 -> ReceiptsScreen(state, { requestCamera("receipt") }, { galleryLauncher.launch("image/*") }, { receiptDetails = it }, body)
-                                9 -> BackupsScreen(state, model::loadBackups, model::createBackup, model::configureBackups, { backup -> model.previewRestore(backup.id) { restorePreview = it } }, body)
-                                10 -> InStoreScreen(state.cart, state.snapshot, canWrite, model::updateCart, { model.checkout { navigate(2) } }, { model.discardCart { navigate(2) } }, body)
-                                11 -> PreparedScreen(state.snapshot, canWrite,
-                                    onCook = { cookingKeepBatch = true; cookingPlan = null; cookingRecipe = it; cookingServings = it.servings },
-                                    onPlan = { initialPlanBatch = it; editingPlan = null; planRecipe = it.recipe; planDate = LocalDate.now(); planDialog = true },
-                                    onServe = { batch, portions, wasted -> model.serveBatch(batch, portions, wasted, null) {} }, modifier = body, onOpenPlan = { navigate(3) })
-                                12 -> AutoPlanScreen(state.snapshot, canWrite, state.online, state.busy, model::previewWeek, { model.acceptWeek(it) { navigate(3, clearHistory = true) } }, body)
-                                13 -> StockMinimumScreen(state.snapshot, canWrite && state.snapshot.stock_tools,
-                                    model::saveStockMinimum, model::deleteStockMinimum, model::replenish, body)
-                                14 -> UseSoonScreen(state, model::useSoonIdeas, onRecipe = ::openRecipePreview, modifier = body)
-                                15 -> PriceHistoryScreen(state.snapshot, body)
-                            }
-                        }
-                    }
-                }
+                if (page.recipeId == null) {
+                    ListDetailLayout(body, wide, list = { pane ->
+                        RecipesScreen(state.copy(syncing = connection.value.syncing), canWrite, model::generate, ::openRecipe, pane, model::setAiMode, model::downloadLocalModel,
+                            onPersonal = { editingPersonal = it; personalNotesOnly = false; personalDialog = true },
+                            onDeletePersonal = { deletingPersonal = it },
+                            onSuggest = model::suggestRecipes, onPreview = ::openRecipePreview,
+                            onImport = { showImportedText("") }, selectedRecipeId = recipeId, onTabChange = { selectedRecipe = null },
+                            onPdfImport = if (state.online && state.cloudProviders.isNotEmpty()) {
+                                { model.clearMessage(); importPdf = true }
+                            } else null,
+                            onSources = { sourceLink = ""; recipePhotoError = null; importSources = true },
+                            onFavorite = { model.savePersonal(it.copy(favorite = !it.favorite)) {} })
+                    }, detail = { pane ->
+                        if (recipe != null) details(recipe, pane)
+                        else DetailPlaceholder(pane, Icons.Outlined.RestaurantMenu, "Detalii rețetă", "Alege o rețetă din listă.")
+                    })
+                } else if (recipe == null) {
+                    DetailPlaceholder(body, Icons.Outlined.RestaurantMenu, "Rețetă indisponibilă", "Revino la lista de rețete.")
+                } else if (cookingGuide && page.recipeId == selectedRecipe) CookingMode(recipe, body) { cookingGuide = false }
+                else details(recipe, body)
             }
+            Destination.Shopping -> ShoppingScreen(state.snapshot, canWrite,
+                onCheck = { model.saveShopping(it.copy(checked = !it.checked)) },
+                onDelete = { model.deleteShopping(it.id) }, modifier = body, onStore = { navigate(Destination.InStore) },
+                onRepeat = model::repeatPurchase, onPrices = { navigate(Destination.Prices) }, onAisleChange = model::saveShopping)
+            Destination.Plan -> PlanScreen(state.snapshot, canWrite,
+                onAdd = { initialPlanBatch = null; planDate = it; planRecipe = null; editingPlan = null; planDialog = true },
+                onEdit = { initialPlanBatch = null; editingPlan = it; planRecipe = it.recipe; planDate = LocalDate.parse(it.on_date); planDialog = true },
+                onDelete = { deletingPlan = it }, onCook = { if (it.prepared_batch_id != null) servePlan = it else { cookingKeepBatch = false; cookingPlan = it.id; cookingRecipe = it.recipe; cookingServings = it.servings } },
+                onShopping = { shoppingPreview = RecipeMath.shopping(state.snapshot, it) }, modifier = body, onAutomatic = { navigate(Destination.Automatic) }, onPrepared = { navigate(Destination.Prepared) }, onRecipe = ::openRecipe,
+                focusDate = focusMealDate, onDateOpened = { focusMealDate = null })
+            Destination.Budget -> BudgetScreen(state.snapshot, canWrite,
+                onExpense = { editingExpense = it; expenseDialog = true }, onDelete = { deletingExpense = it },
+                onBudget = { budgetMonth = it }, onUndo = { undoEvent = it }, modifier = body)
+            Destination.Today -> TodayScreen(state, { navigate(it) }, { if (canWrite) requestCamera("batch") }, { navigate(Destination.Receipts) }, body,
+                onAdd = { addPantry() },
+                onReviewTerms = { reviewPantryTerms = true; navigate(Destination.Pantry) },
+                onOpenMeal = { date -> focusMealDate = date; navigate(Destination.Plan) })
+            Destination.More -> MoreScreen({ navigate(it) }, body, appearance,
+                onAppearance = { appearanceOpen = true }, onReminders = { remindersDialog = true },
+                onServer = { settings = true }, serverEnabled = canWrite && !connection.value.syncing, storeEnabled = canWrite)
+            Destination.Products -> ProductsScreen(state.snapshot.products, canWrite,
+                onAdd = { editingProduct = null; productCode = ""; addAfterProduct = false; productDialog = true }, onScan = { requestCamera("barcode") },
+                onEdit = { editingProduct = it; productCode = it.barcode; addAfterProduct = false; productDialog = true }, onStock = { stockProduct = it }, onDelete = { deletingProduct = it }, modifier = body)
+            Destination.Receipts -> ReceiptsScreen(state, { requestCamera("receipt") }, { galleryLauncher.launch("image/*") }, { receiptDetails = it }, body)
+            Destination.Backups -> BackupsScreen(state, model::loadBackups, model::createBackup, model::configureBackups, { backup -> model.previewRestore(backup.id) { restorePreview = it } }, body)
+            Destination.InStore -> InStoreScreen(state.cart, state.snapshot, canWrite, model::updateCart, { model.checkout { navigate(Destination.Shopping) } }, { model.discardCart { navigate(Destination.Shopping) } }, body)
+            Destination.Prepared -> PreparedScreen(state.snapshot, canWrite,
+                onCook = { cookingKeepBatch = true; cookingPlan = null; cookingRecipe = it; cookingServings = it.servings },
+                onPlan = { initialPlanBatch = it; editingPlan = null; planRecipe = it.recipe; planDate = LocalDate.now(); planDialog = true },
+                onServe = { batch, portions, wasted -> model.serveBatch(batch, portions, wasted, null) {} }, modifier = body, onOpenPlan = { navigate(Destination.Plan) })
+            Destination.Automatic -> AutoPlanScreen(state.snapshot, canWrite, state.online, state.busy, model::previewWeek, { model.acceptWeek(it) { navigate(Destination.Plan, clearHistory = true) } }, body)
+            Destination.Minimums -> StockMinimumScreen(state.snapshot, canWrite && state.snapshot.stock_tools,
+                model::saveStockMinimum, model::deleteStockMinimum, model::replenish, body)
+            Destination.UseSoon -> UseSoonScreen(state, model::useSoonIdeas, onRecipe = ::openRecipePreview, modifier = body)
+            Destination.Prices -> PriceHistoryScreen(state.snapshot, body)
+            Destination.History -> HistoryScreen(state.snapshot, state.config, state.online, body)
         }
     }
 
@@ -504,7 +388,8 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
         title = { Text("Serverul tău") },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
-                ConnectionForm(state.config, state.busy, state.lastSync, model::connect, allowSave = !state.syncing && !state.generating)
+                ConnectionForm(state.config, state.busy, connection.value.lastSync, model::connect,
+                    allowSave = !connection.value.syncing && !state.generating)
             }
         },
         confirmButton = { TextButton(onClick = { settings = false }, enabled = !state.busy) { Text("Închide") } },
@@ -524,14 +409,14 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     quickUseItem?.let { item ->
         QuickUseDialog(item, canWrite && state.snapshot.stock_tools, { quickUseItem = null }) { amount -> model.quickUse(item, amount) { quickUseItem = null } }
     }
-    if (bulkDialog) BulkAddDialog(state.busy, state.message, onDismiss = { bulkDialog = false }, onPreview = model::previewBulk,
+    if (bulkDialog) BulkAddDialog(state.busy, model.state.message, onDismiss = { bulkDialog = false }, onPreview = model::previewBulk,
         onSave = { items -> model.importBulk(bulkBatchId, items) { bulkDialog = false } })
-    if (batchScan) BatchScanDialog(state.snapshot, canWrite, state.message, onDismiss = { batchScan = false },
+    if (batchScan) BatchScanDialog(state.snapshot, canWrite, model.state.message, onDismiss = { batchScan = false },
         onSave = { epoch, rows -> model.importScans(epoch, rows) { batchScan = false } })
     if (remindersDialog) ReminderDialog(state.reminderSettings, notificationAllowed, { remindersDialog = false }, model::saveReminderSettings,
         onPermission = ::requestNotificationPermission, onTest = { if (notificationAllowed) testNotification() else { pendingTest = true; requestNotificationPermission() } })
-    if (syncDialog) SyncDialog(state.pending, state.serverSnapshot, canWrite && !state.syncing, { syncDialog = false }, { model.refresh() },
-        model::resolveConflict, model::discardRestoredChanges, status = syncLabel(state))
+    if (syncDialog) SyncDialog(state.pending, state.serverSnapshot, canWrite && !connection.value.syncing, { syncDialog = false }, { model.refresh() },
+        model::resolveConflict, model::discardRestoredChanges, status = syncLabel(connection.value))
     cookingRecipe?.let { recipe -> CookingDialog(state.snapshot, recipe, cookingServings, canWrite, { cookingRecipe = null }, cookingKeepBatch) { uses, portions, details ->
         if (details == null) model.consume(recipe.title, uses, false, "", null, cookingPlan) { cookingRecipe = null }
         else model.cookBatch(recipe, portions, uses, details, cookingPlan) { cookingRecipe = null }
@@ -539,7 +424,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     wasteItem?.let { item -> WasteDialog(item, canWrite, { wasteItem = null }) { amount, reason, cents ->
         model.consume(item.name, listOf(StockUse(item, amount)), true, reason, cents, null) { wasteItem = null }
     } }
-    if (planDialog) PlanDialog(state.snapshot.allRecipes(), planDate, planRecipe, editingPlan, canWrite, { planDialog = false }, state.snapshot.prepared, initialPlanBatch) { model.savePlan(it) { planDialog = false } }
+    if (planDialog) PlanDialog(recipeLibrary, planDate, planRecipe, editingPlan, canWrite, { planDialog = false }, state.snapshot.prepared, initialPlanBatch) { model.savePlan(it) { planDialog = false } }
     servePlan?.let { plan -> ConfirmAction("Confirmi porțiile mâncate?", "${plan.recipe.title} · ${plan.servings} porții. Ingredientele au fost deja scăzute la gătire.", canWrite, { servePlan = null }) {
         val batch = state.snapshot.prepared.firstOrNull { it.id == plan.prepared_batch_id }
         if (batch == null) model.message("Lotul a fost schimbat. Actualizează datele.") else model.serveBatch(batch, plan.servings, false, plan.id) { servePlan = null }
@@ -565,7 +450,7 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
     variantJson?.let { serialized ->
         val draft = remember(serialized) { ActionRules.json.decodeFromString(AiImportedRecipe.serializer(), serialized).draft() }
         PersonalRecipeDialog(null, canWrite, state.snapshot.aliases, { variantJson = null }, importDraft = draft,
-            importId = variantId, saveError = state.message, reviewTitle = "Verifică varianta propusă") {
+            importId = variantId, saveError = model.state.message, reviewTitle = "Verifică varianta propusă") {
             model.saveImportedPersonal(it) { variantJson = null }
         }
     }
@@ -574,12 +459,12 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
             val api = CamaraApi(config)
             api::importRecipeText
         }
-        RecipeImportDialog(canWrite, state.snapshot.aliases, { importRecipe = false }, state.message, aiImport, initialRecipeText) {
+        RecipeImportDialog(canWrite, state.snapshot.aliases, { importRecipe = false }, model.state.message, aiImport, initialRecipeText) {
             model.saveImportedPersonal(it) { importRecipe = false }
         }
     }
     if (importPdf) state.config?.let { config ->
-        RecipePdfImportDialog(config, canWrite, state.snapshot.aliases, state.message, onDismiss = { importPdf = false },
+        RecipePdfImportDialog(config, canWrite, state.snapshot.aliases, model.state.message, onDismiss = { importPdf = false },
             onSave = model::saveImportedPersonal)
     }
     deletingPersonal?.let { recipe -> ConfirmAction("Elimini rețeta personală?", "Mesele care o au deja în plan rămân păstrate.", canWrite, { deletingPersonal = null }) { model.deletePersonal(recipe.id); deletingPersonal = null } }
@@ -591,60 +476,16 @@ fun CamaraApp(model: CamaraViewModel, appearance: CamaraAppearance, sharedLink: 
 }
 
 @Composable
-private fun ConfirmAction(title: String, text: String, enabled: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(text) },
-        confirmButton = { TextButton(onClick = onConfirm, enabled = enabled) { Text("Confirmă") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anulează") } })
-}
-
-private fun syncLabel(state: UiState, compact: Boolean = false): String {
-    val time = if (compact) null else state.lastSync?.let {
-        DateTimeFormatter.ofPattern("dd.MM HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it))
-    }
-    return when {
-        state.pending.any { it.issue != null || staleEpoch(it, state.serverSnapshot) } ->
-            if (compact) "De verificat" else "Necesită verificare"
-        state.syncing -> "Se sincronizează"
-        state.pending.isNotEmpty() -> if (compact) "În așteptare" else "Salvat pe dispozitiv"
-        state.online -> if (time == null) "La zi" else "La zi · $time"
-        state.lastSync != null -> if (time == null) "Offline" else "Offline · date din $time"
-        compact -> "Indisponibil"
-        else -> "Server indisponibil"
+private fun ShowAppMessage(model: CamaraViewModel, snackbar: SnackbarHostState) {
+    val message by remember(model) { derivedStateOf(structuralEqualityPolicy()) { model.state.message } }
+    LaunchedEffect(message) {
+        message?.let { snackbar.showSnackbar(it); model.clearMessage() }
     }
 }
 
 @Composable
-private fun ConnectionPill(state: UiState, onSync: () -> Unit) {
-    val blocked = state.pending.any { it.issue != null || staleEpoch(it, state.serverSnapshot) }
-    val color = when {
-        blocked -> MaterialTheme.colorScheme.error
-        state.pending.isNotEmpty() || !state.online -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.primary
-    }
-    val container = when {
-        blocked -> MaterialTheme.colorScheme.errorContainer
-        state.pending.isNotEmpty() || !state.online -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.primaryContainer
-    }
-    val content = when {
-        blocked -> MaterialTheme.colorScheme.onErrorContainer
-        state.pending.isNotEmpty() || !state.online -> MaterialTheme.colorScheme.onSecondaryContainer
-        else -> MaterialTheme.colorScheme.onPrimaryContainer
-    }
-    val description = listOf("Detalii sincronizare", syncLabel(state))
-    val pending = state.pending.size.takeIf { it > 0 }?.let { countLabel(it, "acțiune în așteptare", "acțiuni în așteptare") }
-    Box(Modifier.widthIn(max = 118.dp).heightIn(min = 48.dp).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onSync)
-        .semantics { contentDescription = (description + listOfNotNull(pending)).joinToString(" · ") },
-        contentAlignment = Alignment.Center) {
-        Surface(color = container, contentColor = content, shape = CircleShape) {
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                if (state.syncing && !blocked) CircularProgressIndicator(Modifier.size(11.dp), color = content, strokeWidth = 1.5.dp)
-                else Box(Modifier.size(6.dp).background(color, CircleShape))
-                Text(syncLabel(state, compact = true), Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (pending != null) Text("${state.pending.size}", style = MaterialTheme.typography.labelSmall.tabularNumbers())
-            }
-        }
-    }
+private fun ConfirmAction(title: String, text: String, enabled: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Text(text) },
+        confirmButton = { TextButton(onClick = onConfirm, enabled = enabled) { Text("Confirmă") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anulează") } })
 }
 

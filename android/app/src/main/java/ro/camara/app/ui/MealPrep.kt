@@ -18,18 +18,25 @@ import java.time.LocalDate
 @Composable
 fun PreparedScreen(snapshot: Snapshot, enabled: Boolean, onCook: (Recipe) -> Unit, onPlan: (PreparedBatch) -> Unit,
     onServe: (PreparedBatch, Int, Boolean) -> Unit, modifier: Modifier, onOpenPlan: (() -> Unit)? = null) {
-    var menu by remember { mutableStateOf(false) }
+    var menu by rememberSaveable { mutableStateOf(false) }
     var serving by remember { mutableStateOf<PreparedBatch?>(null) }
     var portions by remember { mutableIntStateOf(1) }
     var wasted by remember { mutableStateOf(false) }
     var filter by rememberSaveable { mutableStateOf("available") }
-    val visible = snapshot.prepared.filter { filter == "all" || it.remaining > 0 && (filter != "frozen" || it.location == "congelator") }
-        .sortedWith(compareBy<PreparedBatch> { it.remaining == 0 }.thenBy { it.expires_on })
+    val library = rememberRecipeLibrary(snapshot)
+    val visible = remember(snapshot.prepared, filter) {
+        snapshot.prepared.filter { filter == "all" || it.remaining > 0 && (filter != "frozen" || it.location == "congelator") }
+            .sortedWith(compareBy<PreparedBatch> { it.remaining == 0 }.thenBy { it.expires_on })
+    }
+    if (menu) {
+        val choices = remember(library) { library.distinctBy { it.title to it.ingredients } }
+        RecipePickerDialog(choices, onClose = { menu = false }) { recipe, _ -> menu = false; onCook(recipe) }
+    }
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { PageHeader("Pentru alte zile", "Porțiile pe care le-ai pregătit.") {
-            Box {
-                TextButton(onClick = { menu = true }, enabled = enabled && snapshot.allRecipes().isNotEmpty()) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Text("Gătește") }
-                DropdownMenu(menu, { menu = false }, Modifier.heightIn(max = 350.dp)) { snapshot.allRecipes().distinctBy { it.title to it.ingredients }.forEach { recipe -> DropdownMenuItem(text = { Text(recipe.title) }, onClick = { menu = false; onCook(recipe) }) } }
+            TextButton(onClick = { menu = true }, enabled = enabled && library.isNotEmpty()) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                Text("Gătește")
             }
         } }
         item { FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf("available" to "Cu porții rămase", "frozen" to "Congelate", "all" to "Toate").forEach { (key,label) -> FilterChip(filter == key, { filter = key }, label = { Text(label) }) } } }

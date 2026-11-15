@@ -22,6 +22,12 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 import ro.camara.app.data.*
 
+private val planLocale = Locale.forLanguageTag("ro-RO")
+private val weekStartFormat = DateTimeFormatter.ofPattern("d MMM", planLocale)
+private val weekEndFormat = DateTimeFormatter.ofPattern("d MMM yyyy", planLocale)
+private val planDayFormat = DateTimeFormatter.ofPattern("EEEE, d MMM", planLocale)
+private val planSlots = listOf("breakfast", "lunch", "dinner")
+
 @Composable
 fun PlanScreen(snapshot: Snapshot, enabled: Boolean, onAdd: (LocalDate) -> Unit, onEdit: (MealPlan) -> Unit,
     onDelete: (MealPlan) -> Unit, onCook: (MealPlan) -> Unit, onShopping: (List<MealPlan>) -> Unit, modifier: Modifier,
@@ -42,10 +48,17 @@ fun PlanScreen(snapshot: Snapshot, enabled: Boolean, onAdd: (LocalDate) -> Unit,
         }
     }
     val monday = currentMonday.plusWeeks(offset)
-    val meals = snapshot.plans.filter { it.on_date >= monday.toString() && it.on_date <= monday.plusDays(6).toString() }
+    val meals = remember(snapshot.plans, monday) {
+        val start = monday.toString()
+        val end = monday.plusDays(6).toString()
+        snapshot.plans.filter { it.on_date in start..end }
+    }
     val day = monday.plusDays(dayIndex.toLong())
-    val locale = Locale.forLanguageTag("ro-RO")
-    val selectedMeals = meals.filter { it.on_date == day.toString() }.sortedBy { listOf("breakfast", "lunch", "dinner").indexOf(it.slot) }
+    val selectedMeals = remember(meals, day) {
+        val selectedDate = day.toString()
+        meals.filter { it.on_date == selectedDate }.sortedBy { planSlots.indexOf(it.slot) }
+    }
+    val hasChoices = rememberRecipeLibrary(snapshot).isNotEmpty()
     LazyColumn(modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { PageHeader("Planul tău", countLabel(meals.size, "masă în această săptămână", "mese în această săptămână")) {
             TextButton(onClick = onAutomatic, enabled = enabled) { Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Plan AI") }
@@ -55,7 +68,7 @@ fun PlanScreen(snapshot: Snapshot, enabled: Boolean, onAdd: (LocalDate) -> Unit,
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { offset-- }) { Icon(Icons.Outlined.ChevronLeft, "Săptămâna anterioară") }
-                        Text("${monday.format(DateTimeFormatter.ofPattern("d MMM", locale))} — ${monday.plusDays(6).format(DateTimeFormatter.ofPattern("d MMM yyyy", locale))}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Text("${monday.format(weekStartFormat)} — ${monday.plusDays(6).format(weekEndFormat)}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         IconButton(onClick = { offset++ }) { Icon(Icons.Outlined.ChevronRight, "Săptămâna următoare") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -78,8 +91,8 @@ fun PlanScreen(snapshot: Snapshot, enabled: Boolean, onAdd: (LocalDate) -> Unit,
         }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(day.format(DateTimeFormatter.ofPattern("EEEE, d MMM", locale)).replaceFirstChar { it.titlecase(locale) }, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = { onAdd(day) }, enabled = enabled && (snapshot.allRecipes().isNotEmpty() || snapshot.prepared.any { it.remaining > 0 })) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Text("Masă") }
+                Text(day.format(planDayFormat).replaceFirstChar { it.titlecase(planLocale) }, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { onAdd(day) }, enabled = enabled && hasChoices) { Icon(Icons.Outlined.Add, null, Modifier.size(18.dp)); Text("Masă") }
             }
         }
         if (selectedMeals.isEmpty()) item { EmptyPanel(Icons.Outlined.CalendarToday, "O zi încă liberă", "Adaugă o masă sau pregătește un plan automat cu buget.") }

@@ -34,19 +34,14 @@ fun PlanDialog(recipes: List<Recipe>, date: LocalDate, initialRecipe: Recipe?, e
     var day by remember { mutableStateOf(editing?.on_date ?: date.toString()) }
     var slot by remember { mutableStateOf(editing?.slot ?: "dinner") }
     var portions by remember { mutableIntStateOf(editing?.servings ?: if (initialBatch != null) 1 else recipe?.servings ?: 1) }
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val id = remember { editing?.id ?: UUID.randomUUID().toString() }
+    val choices = remember(editing?.recipe, initialRecipe, recipes) { listOfNotNull(editing?.recipe, initialRecipe) + recipes }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Planifică o masă") }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box {
-                OutlinedButton(onClick = { expanded = true }, enabled = enabled) { Text((if (batchId != null) "Deja gătit · " else "") + (recipe?.title ?: "Alege o rețetă")) }
-                DropdownMenu(expanded, { expanded = false }, Modifier.heightIn(max = 300.dp)) {
-                    (listOfNotNull(editing?.recipe, initialRecipe) + recipes).distinctBy { it.id }.forEach { value ->
-                        DropdownMenuItem(text = { Text(value.title) }, onClick = { recipe = value; batchId = null; portions = value.servings; expanded = false })
-                    }
-                    prepared.filter { it.remaining > 0 }.forEach { batch -> DropdownMenuItem(text = { Text("Deja gătit · ${batch.recipe.title} · ${batch.remaining} porții") }, onClick = { recipe = batch.recipe; batchId = batch.id; portions = 1; expanded = false }) }
-                }
+            OutlinedButton(onClick = { expanded = true }, enabled = enabled) {
+                Text((if (batchId != null) "Deja gătit · " else "") + (recipe?.title ?: "Alege o rețetă"))
             }
             OutlinedTextField(day, { day = it.take(10) }, label = { Text("Data · AAAA-LL-ZZ") }, singleLine = true)
             listOf("breakfast", "lunch", "dinner").forEach { value -> FilterChip(slot == value, { slot = value }, label = { Text(slotName(value)) }) }
@@ -58,6 +53,12 @@ fun PlanDialog(recipes: List<Recipe>, date: LocalDate, initialRecipe: Recipe?, e
         if (runCatching { LocalDate.parse(day) }.isFailure || recipe == null) error = "Alege rețeta și o dată în format AAAA-LL-ZZ."
         else onSave(MealPlan(id, day, slot, recipe!!, portions, prepared_batch_id = batchId))
     }, enabled = enabled && recipe != null) { Text("Salvează") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anulează") } })
+    if (expanded) RecipePickerDialog(choices, onClose = { expanded = false }, prepared = prepared) { selected, batch ->
+        recipe = selected
+        batchId = batch?.id
+        portions = if (batch == null) selected.servings else 1
+        expanded = false
+    }
 }
 
 @Composable
